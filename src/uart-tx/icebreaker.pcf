@@ -1,0 +1,60 @@
+# ============================================================================
+# iCEBreaker Pin Constraints for UART TX Project
+# ============================================================================
+#
+# This file maps our Verilog signal names to physical FPGA pins.
+# The iCEBreaker uses an iCE40UP5K in a SG48 package.
+#
+# Pin numbers come from the iCEBreaker schematic (see docs/).
+#
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# SYSTEM CLOCK
+# ----------------------------------------------------------------------------
+# The iCEBreaker has a 12 MHz oscillator connected to pin 35.
+# This clock drives all our timing logic.
+set_io clk 35
+
+# ----------------------------------------------------------------------------
+# UART TX PIN
+# ----------------------------------------------------------------------------
+# Pin 9 connects to the FT2232H USB-to-serial chip (Channel B, BDBUS0).
+# This is the FPGA's transmit line - data flows FROM the FPGA TO the PC.
+#
+# The FT2232H presents this as a virtual COM port on your computer:
+#   - Linux: Usually /dev/ttyUSB1
+#   - macOS: Usually /dev/cu.usbserial-*
+#   - Windows: COM port (check Device Manager)
+#
+# No external wiring needed - it's all on-board!
+set_io tx 9
+
+# ----------------------------------------------------------------------------
+# ACTIVITY LED
+# ----------------------------------------------------------------------------
+# Pin 37 is the green "accent" LED on the main iCEBreaker board.
+# We use it to show when the UART is actively transmitting.
+# Active HIGH: '1' = LED on, '0' = LED off
+set_io led 37
+
+# ============================================================================
+# OTHER AVAILABLE PINS (for future reference)
+# ============================================================================
+#
+# UART RX (if you want to receive data):
+#   set_io rx 6
+#
+# Breakout board LEDs (accent LEDs for more indicators):
+#   set_io led1 26   # Green
+#   set_io led2 27   # Green
+#   set_io led3 25   # Green
+#   set_io led4 23   # Green
+#   set_io led5 21   # Red
+#
+# Breakout board buttons:
+#   set_io btn1 20
+#   set_io btn2 19
+#   set_io btn3 18
+#
+# ============================================================================

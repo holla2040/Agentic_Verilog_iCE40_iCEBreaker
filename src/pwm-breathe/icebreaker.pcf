@@ -1,0 +1,7 @@
+# Pin Constraints for iCEBreaker FPGA - PWM Breathe
+
+# Clock - 12 MHz oscillator
+set_io clk 35
+
+# LED - Green accent LED on iCEBreaker board
+set_io led 37

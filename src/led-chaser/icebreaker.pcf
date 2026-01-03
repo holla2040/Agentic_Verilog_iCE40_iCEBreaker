@@ -1,0 +1,24 @@
+# =============================================================================
+# PIN CONSTRAINTS for LED Chaser - iCEBreaker Breakout Board
+# =============================================================================
+# This file maps our Verilog signal names to physical FPGA pins.
+# Pin numbers come from the official iCEBreaker PCF reference.
+
+# -----------------------------------------------------------------------------
+# CLOCK INPUT
+# -----------------------------------------------------------------------------
+# The iCEBreaker has a 12 MHz oscillator connected to pin 35
+set_io clk 35
+
+# -----------------------------------------------------------------------------
+# BREAKOUT BOARD LEDs (active HIGH)
+# -----------------------------------------------------------------------------
+# These are the 5 LEDs on the snap-off breakout section.
+# Physical arrangement on the board: LED1 - LED2 - LED3 - LED4 - LED5
+# Colors: Green - Green - Green - Green - Red
+
+set_io LED1 26
+set_io LED2 27
+set_io LED3 25
+set_io LED4 23
+set_io LED5 21

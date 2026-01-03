@@ -1,0 +1,56 @@
+# ============================================================================
+# iCEBreaker Pin Constraints for UART RX Project
+# ============================================================================
+#
+# This file maps Verilog signal names to physical FPGA pins.
+#
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# SYSTEM CLOCK
+# ----------------------------------------------------------------------------
+# 12 MHz oscillator on the iCEBreaker board
+set_io clk 35
+
+# ----------------------------------------------------------------------------
+# UART RX PIN
+# ----------------------------------------------------------------------------
+# Pin 6 connects to the FT2232H USB-to-serial chip (Channel B, BDBUS1).
+# This is the FPGA's receive line - data flows FROM the PC TO the FPGA.
+#
+# When you type on your keyboard in a terminal program:
+#   Keyboard → PC → USB → FT2232H → Pin 6 → FPGA
+#
+# The signal is active LOW for start bit, HIGH for idle/stop.
+set_io rx 6
+
+# ----------------------------------------------------------------------------
+# LED OUTPUT
+# ----------------------------------------------------------------------------
+# Pin 37 is the green "accent" LED on the main iCEBreaker board.
+# Same LED used in the Blinky project.
+# Active HIGH: '1' = LED on, '0' = LED off
+#
+# This LED is controlled by the received '0' and '1' characters.
+set_io led 37
+
+# ============================================================================
+# OTHER AVAILABLE PINS (for reference)
+# ============================================================================
+#
+# UART TX (if you want to send data back):
+#   set_io tx 9
+#
+# Breakout board LEDs:
+#   set_io led1 26   # Green
+#   set_io led2 27   # Green
+#   set_io led3 25   # Green
+#   set_io led4 23   # Green
+#   set_io led5 21   # Red
+#
+# Breakout board buttons:
+#   set_io btn1 20
+#   set_io btn2 19
+#   set_io btn3 18
+#
+# ============================================================================

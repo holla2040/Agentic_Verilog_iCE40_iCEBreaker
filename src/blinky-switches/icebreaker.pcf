@@ -1,0 +1,10 @@
+# Clock
+set_io clk 35
+
+# LED (accent LED on iCEBreaker)
+set_io led 37
+
+# Switches on PMOD2
+set_io sw1 18
+set_io sw2 19
+set_io sw3 20
