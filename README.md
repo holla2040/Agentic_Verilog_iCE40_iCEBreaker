@@ -50,7 +50,7 @@ The iCE40 UltraPlus 5K is a low-power FPGA well-suited for edge applications:
 
 #### PMOD AD1 - Two-Channel 12-bit ADC
 
-The [PMOD AD1](https://digilent.com/reference/pmod/pmodad1/reference-manual) features two Analog Devices AD7476A 12-bit ADCs with a 1 MSPS sampling rate. It uses an SPI interface and is ideal for analog signal acquisition.
+The <a href="https://digilent.com/reference/pmod/pmodad1/reference-manual" target="_blank">PMOD AD1</a> features two Analog Devices AD7476A 12-bit ADCs with a 1 MSPS sampling rate. It uses an SPI interface and is ideal for analog signal acquisition.
 
 Reference materials in `docs/`:
 - `pmodad1_sch.pdf` - PMOD AD1 schematic
@@ -58,7 +58,7 @@ Reference materials in `docs/`:
 
 #### PMOD DA2 - Two-Channel 12-bit DAC
 
-The [PMOD DA2](https://digilent.com/reference/pmod/pmodda2/reference-manual) features two Texas Instruments DAC121S101 12-bit DACs with an SPI interface. It provides dual analog outputs for signal generation applications.
+The <a href="https://digilent.com/reference/pmod/pmodda2/reference-manual" target="_blank">PMOD DA2</a> features two Texas Instruments DAC121S101 12-bit DACs with an SPI interface. It provides dual analog outputs for signal generation applications.
 
 Reference materials in `docs/`:
 - `pmodda2_sch.pdf` - PMOD DA2 schematic
