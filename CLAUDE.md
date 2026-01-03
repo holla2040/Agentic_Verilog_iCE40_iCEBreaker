@@ -4,6 +4,10 @@
 
 This repository contains Verilog HDL designs for the iCEBreaker FPGA board featuring the Lattice iCE40 UP5K. Claude Code is used to generate and iterate on Verilog modules.
 
+## Git Workflow
+
+**Do not commit or push changes without explicit instructions from the user.** Always wait for the user to explicitly request a commit or push before performing these operations.
+
 ## Target Hardware
 
 - **Board**: iCEBreaker v1.0b/v1.1a
