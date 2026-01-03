@@ -13,16 +13,20 @@ This repository demonstrates an agentic approach to FPGA development where Claud
 The [iCEBreaker](https://1bitsquared.com/products/icebreaker) is an open-source FPGA development board designed for learning and prototyping. The official repository with schematics, examples, and documentation is available at [github.com/icebreaker-fpga/icebreaker](https://github.com/icebreaker-fpga/icebreaker).
 
 Reference materials included in `docs/`:
-- `icebreaker-v1.1a-sch.pdf` - Full board schematic
-- `icebreaker-v1_0b-legend-jumpers.jpg` - Jumper configuration guide
+- <a href="docs/icebreaker-v1.1a-sch.pdf" target="_blank">icebreaker-v1.1a-sch.pdf</a> - Full board schematic
+- <a href="docs/icebreaker-v1_0b-legend-jumpers.jpg" target="_blank">icebreaker-v1_0b-legend-jumpers.jpg</a> - Jumper configuration guide
 
 ### Block Diagram
 
-![iCEBreaker Block Diagram](docs/icebreaker-block-diagram.jpg)
+<a href="docs/icebreaker-block-diagram.jpg" target="_blank">
+  <img src="docs/icebreaker-block-diagram.jpg" alt="iCEBreaker Block Diagram">
+</a>
 
 ### Board Pin Legend
 
-![iCEBreaker Pin Legend](docs/icebreaker-v1_0b-legend.jpg)
+<a href="docs/icebreaker-v1_0b-legend.jpg" target="_blank">
+  <img src="docs/icebreaker-v1_0b-legend.jpg" alt="iCEBreaker Pin Legend">
+</a>
 
 *Note: We are using the iCEBreaker v1.1A board. The pin legend above is from v1.0b, but the pinout is expected to be the same.*
 
@@ -53,16 +57,16 @@ The iCE40 UltraPlus 5K is a low-power FPGA well-suited for edge applications:
 The <a href="https://digilent.com/reference/pmod/pmodad1/reference-manual" target="_blank">PMOD AD1</a> features two Analog Devices AD7476A 12-bit ADCs with a 1 MSPS sampling rate. It uses an SPI interface and is ideal for analog signal acquisition.
 
 Reference materials in `docs/`:
-- `pmodad1_sch.pdf` - PMOD AD1 schematic
-- `ad7476a.pdf` - AD7476A ADC datasheet
+- <a href="docs/pmodad1_sch.pdf" target="_blank">pmodad1_sch.pdf</a> - PMOD AD1 schematic
+- <a href="docs/ad7476a.pdf" target="_blank">ad7476a.pdf</a> - AD7476A ADC datasheet
 
 #### PMOD DA2 - Two-Channel 12-bit DAC
 
 The <a href="https://digilent.com/reference/pmod/pmodda2/reference-manual" target="_blank">PMOD DA2</a> features two Texas Instruments DAC121S101 12-bit DACs with an SPI interface. It provides dual analog outputs for signal generation applications.
 
 Reference materials in `docs/`:
-- `pmodda2_sch.pdf` - PMOD DA2 schematic
-- `dac121s101.pdf` - DAC121S101 DAC datasheet
+- <a href="docs/pmodda2_sch.pdf" target="_blank">pmodda2_sch.pdf</a> - PMOD DA2 schematic
+- <a href="docs/dac121s101.pdf" target="_blank">dac121s101.pdf</a> - DAC121S101 DAC datasheet
 
 ## Using Claude Code for Verilog Generation
 
