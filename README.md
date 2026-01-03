@@ -84,10 +84,13 @@ These projects use the open-source FPGA toolchain:
 
 Build any example with:
 ```bash
-cd <example-directory>
-make        # Build the bitstream
+cd src/<example-directory>
+make        # Build the bitstream (outputs to /tmp)
 make prog   # Program the FPGA
+make clean  # Remove build artifacts from /tmp
 ```
+
+Build artifacts (`.json`, `.asc`, `.bin`) are generated in `/tmp` to keep source directories clean.
 
 ## Resources
 
