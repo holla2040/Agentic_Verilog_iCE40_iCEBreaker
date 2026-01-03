@@ -46,6 +46,24 @@ The iCE40 UltraPlus 5K is a low-power FPGA well-suited for edge applications:
 - Up to 39 GPIO pins
 - Ultra-low power operation (as low as 75 uA in standby)
 
+### PMOD Modules
+
+#### PMOD AD1 - Two-Channel 12-bit ADC
+
+The [PMOD AD1](https://digilent.com/reference/pmod/pmodad1/reference-manual) features two Analog Devices AD7476A 12-bit ADCs with a 1 MSPS sampling rate. It uses an SPI interface and is ideal for analog signal acquisition.
+
+Reference materials in `docs/`:
+- `pmodad1_sch.pdf` - PMOD AD1 schematic
+- `ad7476a.pdf` - AD7476A ADC datasheet
+
+#### PMOD DA2 - Two-Channel 12-bit DAC
+
+The [PMOD DA2](https://digilent.com/reference/pmod/pmodda2/reference-manual) features two Texas Instruments DAC121S101 12-bit DACs with an SPI interface. It provides dual analog outputs for signal generation applications.
+
+Reference materials in `docs/`:
+- `pmodda2_sch.pdf` - PMOD DA2 schematic
+- `dac121s101.pdf` - DAC121S101 DAC datasheet
+
 ## Using Claude Code for Verilog Generation
 
 ### Workflow
@@ -97,7 +115,9 @@ for the iCE40 UP5K target.
 │   ├── icebreaker-v1.1a-sch.pdf        # iCEBreaker schematic
 │   ├── icebreaker-block-diagram.jpg    # iCEBreaker block diagram
 │   ├── icebreaker-v1_0b-legend.jpg     # Board pin legend
-│   └── icebreaker-v1_0b-legend-jumpers.jpg  # Jumper configuration
+│   ├── icebreaker-v1_0b-legend-jumpers.jpg  # Jumper configuration
+│   ├── pmodad1_sch.pdf         # PMOD AD1 schematic
+│   └── pmodda2_sch.pdf         # PMOD DA2 schematic
 ├── src/                # Verilog source files
 ├── LICENSE
 └── README.md
