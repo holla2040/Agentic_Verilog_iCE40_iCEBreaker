@@ -148,6 +148,10 @@ sudo apt install fpga-icestorm yosys nextpnr-ice40
 brew install icestorm yosys nextpnr
 ```
 
+## External Resources
+
+- <a href="https://github.com/icebreaker-fpga/icebreaker-verilog-examples" target="_blank">iCEBreaker Verilog Examples</a> - Official collection of example Verilog projects for the iCEBreaker board
+
 ## License
 
 MIT License - See [LICENSE](LICENSE) for details.
