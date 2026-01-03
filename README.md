@@ -24,6 +24,8 @@ Reference materials included in `docs/`:
 
 ![iCEBreaker Pin Legend](docs/icebreaker-v1_0b-legend.jpg)
 
+*Note: We are using the iCEBreaker v1.1A board. The pin legend above is from v1.0b, but the pinout is expected to be the same.*
+
 ### Features
 
 - Lattice iCE40 UP5K FPGA
