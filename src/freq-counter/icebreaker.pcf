@@ -1,0 +1,47 @@
+# ============================================================================
+# iCEBreaker Pin Constraints for Frequency Counter Project
+# ============================================================================
+#
+# This file maps Verilog signal names to physical FPGA pins.
+#
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# SYSTEM CLOCK
+# ----------------------------------------------------------------------------
+# 12 MHz oscillator on the iCEBreaker board
+set_io clk 35
+
+# ----------------------------------------------------------------------------
+# UART TX PIN
+# ----------------------------------------------------------------------------
+# Pin 9 connects to the FT2232H USB-to-serial chip (Channel B, BDBUS0).
+# This is the FPGA's transmit line - data flows FROM the FPGA TO the PC.
+set_io tx 9
+
+# ----------------------------------------------------------------------------
+# FREQUENCY GENERATOR OUTPUT - PMOD 1A Pin 1
+# ----------------------------------------------------------------------------
+# The generated test signal (500 kHz / 1 MHz / 2 MHz based on button)
+# Connect this to freq_in (pin 7) with a jumper wire for loopback testing.
+set_io freq_out 4
+
+# ----------------------------------------------------------------------------
+# FREQUENCY COUNTER INPUT - PMOD 1A Pin 7
+# ----------------------------------------------------------------------------
+# The input signal to measure. Connect to freq_out for self-testing,
+# or connect an external signal source (3.3V logic levels).
+set_io freq_in 3
+
+# ----------------------------------------------------------------------------
+# BUTTONS (on PMOD2 connector - accent switches breakout)
+# ----------------------------------------------------------------------------
+# These select the generated frequency:
+#   Button 1: 500 kHz
+#   Button 2: 1 MHz
+#   Button 3: 2 MHz
+set_io btn1 18
+set_io btn2 19
+set_io btn3 20
+
+# ============================================================================

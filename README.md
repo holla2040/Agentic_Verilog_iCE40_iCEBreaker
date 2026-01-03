@@ -16,7 +16,9 @@ fpga/
 │   ├── pwm-breathe/     # Smooth LED breathing effect using PWM
 │   ├── led-chaser/      # Knight Rider running lights effect
 │   ├── uart-tx/         # UART transmitter - sends "Hello" to PC
-│   └── uart-rx/         # UART receiver - LED control from keyboard
+│   ├── uart-rx/         # UART receiver - LED control from keyboard
+│   ├── uart-echo/       # UART echo with case toggle
+│   └── freq-counter/    # Frequency counter with selectable generator
 ├── docs/                # Reference documentation
 │   └── icebreaker-v1.1a-sch.pdf
 └── README.md
@@ -73,6 +75,27 @@ Receives keyboard input from PC and controls the accent LED. Type '1' to turn LE
 - ASCII character comparison
 
 **Testing:** `make prog`, then `screen /dev/ttyUSB1 115200`, type '1' or '0'
+
+### UART-Echo
+Echoes received characters back with case toggled (lowercase becomes uppercase and vice versa). Demonstrates:
+- Combined RX and TX in a single module
+- ASCII manipulation (XOR with 0x20 toggles case for letters)
+- Character range detection (checking if byte is a letter)
+- Chaining RX completion to TX start
+
+**Testing:** `make prog`, then `screen /dev/ttyUSB1 115200`, type letters
+
+### Freq-Counter
+A frequency counter with a selectable frequency generator. The generator outputs on PMOD 1A pin 1, and the counter measures the signal on PMOD 1A pin 7. Connect them with a jumper for loopback testing. Demonstrates:
+- Clock dividers for frequency generation (500 kHz, 1 MHz, 2 MHz)
+- Reciprocal frequency counting (count edges over 1-second gate time)
+- Binary to decimal ASCII conversion for UART output
+- Input synchronization for external signals
+- Button input for frequency selection
+
+**Maximum measurable frequency:** ~3 MHz (limited by 12 MHz clock and edge detection)
+
+**Testing:** Connect PMOD 1A pin 1 to pin 7 with a jumper, `make prog`, then `screen /dev/ttyUSB1 115200`. Press buttons to change generator frequency.
 
 ## Toolchain
 
