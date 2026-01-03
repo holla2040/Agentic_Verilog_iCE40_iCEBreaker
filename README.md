@@ -14,11 +14,17 @@ The [iCEBreaker](https://1bitsquared.com/products/icebreaker) is an open-source 
 
 Reference materials included in `docs/`:
 - `icebreaker-v1.1a-sch.pdf` - Full board schematic
-- `icebreaker-block-diagram.jpg` - System block diagram
-- `icebreaker-v1_0b-legend.jpg` - Board pin legend
 - `icebreaker-v1_0b-legend-jumpers.jpg` - Jumper configuration guide
 
-It features:
+### Block Diagram
+
+![iCEBreaker Block Diagram](docs/icebreaker-block-diagram.jpg)
+
+### Board Pin Legend
+
+![iCEBreaker Pin Legend](docs/icebreaker-v1_0b-legend.jpg)
+
+### Features
 
 - Lattice iCE40 UP5K FPGA
 - USB programming via FTDI FT2232H
