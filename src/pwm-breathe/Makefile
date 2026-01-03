@@ -1,16 +1,25 @@
-all: pwm_breathe.bin
+# Build directory for artifacts
+BUILD_DIR = /tmp
 
-pwm_breathe.json: pwm_breathe.v
-	yosys -p "synth_ice40 -top pwm_breathe -json pwm_breathe.json" pwm_breathe.v
+PROJ = pwm_breathe
+DEVICE = up5k
+PACKAGE = sg48
 
-pwm_breathe.asc: pwm_breathe.json icebreaker.pcf
-	nextpnr-ice40 --up5k --package sg48 --json pwm_breathe.json --pcf icebreaker.pcf --asc pwm_breathe.asc
+all: $(BUILD_DIR)/$(PROJ).bin
 
-pwm_breathe.bin: pwm_breathe.asc
-	icepack pwm_breathe.asc pwm_breathe.bin
+$(BUILD_DIR)/$(PROJ).json: $(PROJ).v
+	yosys -p "synth_ice40 -top $(PROJ) -json $(BUILD_DIR)/$(PROJ).json" $(PROJ).v
 
-prog: pwm_breathe.bin
-	iceprog pwm_breathe.bin
+$(BUILD_DIR)/$(PROJ).asc: $(BUILD_DIR)/$(PROJ).json icebreaker.pcf
+	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --json $(BUILD_DIR)/$(PROJ).json --pcf icebreaker.pcf --asc $(BUILD_DIR)/$(PROJ).asc
+
+$(BUILD_DIR)/$(PROJ).bin: $(BUILD_DIR)/$(PROJ).asc
+	icepack $(BUILD_DIR)/$(PROJ).asc $(BUILD_DIR)/$(PROJ).bin
+
+prog: $(BUILD_DIR)/$(PROJ).bin
+	iceprog $(BUILD_DIR)/$(PROJ).bin
 
 clean:
-	rm -f pwm_breathe.json pwm_breathe.asc pwm_breathe.bin
+	rm -f $(BUILD_DIR)/$(PROJ).json $(BUILD_DIR)/$(PROJ).asc $(BUILD_DIR)/$(PROJ).bin
+
+.PHONY: all prog clean

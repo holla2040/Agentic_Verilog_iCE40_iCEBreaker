@@ -9,11 +9,14 @@
 #   - iceprog:   FPGA programming (uploads to the board)
 #
 # Usage:
-#   make        - Build the project (generates uart_tx.bin)
+#   make        - Build the project (generates uart_tx.bin in /tmp)
 #   make prog   - Program the iCEBreaker board
 #   make clean  - Remove all generated files
 #
 # ============================================================================
+
+# Build directory for artifacts
+BUILD_DIR = /tmp
 
 # Project name - must match the top module name in uart_tx.v
 PROJ = uart_tx
@@ -23,31 +26,31 @@ DEVICE = up5k
 PACKAGE = sg48
 
 # Default target: build the bitstream
-all: $(PROJ).bin
+all: $(BUILD_DIR)/$(PROJ).bin
 
 # Step 1: Synthesis with Yosys
 # Converts Verilog to a JSON netlist of logic gates
-$(PROJ).json: $(PROJ).v
-	yosys -p "synth_ice40 -top $(PROJ) -json $(PROJ).json" $(PROJ).v
+$(BUILD_DIR)/$(PROJ).json: $(PROJ).v
+	yosys -p "synth_ice40 -top $(PROJ) -json $(BUILD_DIR)/$(PROJ).json" $(PROJ).v
 
 # Step 2: Place and Route with nextpnr
 # Assigns logic to physical FPGA resources and routes connections
-$(PROJ).asc: $(PROJ).json icebreaker.pcf
-	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --json $(PROJ).json --pcf icebreaker.pcf --asc $(PROJ).asc
+$(BUILD_DIR)/$(PROJ).asc: $(BUILD_DIR)/$(PROJ).json icebreaker.pcf
+	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --json $(BUILD_DIR)/$(PROJ).json --pcf icebreaker.pcf --asc $(BUILD_DIR)/$(PROJ).asc
 
 # Step 3: Bitstream generation with icepack
 # Creates the binary file that configures the FPGA
-$(PROJ).bin: $(PROJ).asc
-	icepack $(PROJ).asc $(PROJ).bin
+$(BUILD_DIR)/$(PROJ).bin: $(BUILD_DIR)/$(PROJ).asc
+	icepack $(BUILD_DIR)/$(PROJ).asc $(BUILD_DIR)/$(PROJ).bin
 
 # Program the FPGA
 # The bitstream is stored in flash, so it persists after power-off
-prog: $(PROJ).bin
-	iceprog $(PROJ).bin
+prog: $(BUILD_DIR)/$(PROJ).bin
+	iceprog $(BUILD_DIR)/$(PROJ).bin
 
 # Remove all generated files
 clean:
-	rm -f $(PROJ).json $(PROJ).asc $(PROJ).bin
+	rm -f $(BUILD_DIR)/$(PROJ).json $(BUILD_DIR)/$(PROJ).asc $(BUILD_DIR)/$(PROJ).bin
 
 # Phony targets (not actual files)
 .PHONY: all prog clean

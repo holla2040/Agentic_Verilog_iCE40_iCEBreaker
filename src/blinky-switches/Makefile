@@ -1,16 +1,25 @@
-all: blinky_switches.bin
+# Build directory for artifacts
+BUILD_DIR = /tmp
 
-blinky_switches.json: blinky_switches.v
-	yosys -p "synth_ice40 -top blinky_switches -json blinky_switches.json" blinky_switches.v
+PROJ = blinky_switches
+DEVICE = up5k
+PACKAGE = sg48
 
-blinky_switches.asc: blinky_switches.json icebreaker.pcf
-	nextpnr-ice40 --up5k --package sg48 --json blinky_switches.json --pcf icebreaker.pcf --asc blinky_switches.asc
+all: $(BUILD_DIR)/$(PROJ).bin
 
-blinky_switches.bin: blinky_switches.asc
-	icepack blinky_switches.asc blinky_switches.bin
+$(BUILD_DIR)/$(PROJ).json: $(PROJ).v
+	yosys -p "synth_ice40 -top $(PROJ) -json $(BUILD_DIR)/$(PROJ).json" $(PROJ).v
 
-prog: blinky_switches.bin
-	iceprog blinky_switches.bin
+$(BUILD_DIR)/$(PROJ).asc: $(BUILD_DIR)/$(PROJ).json icebreaker.pcf
+	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --json $(BUILD_DIR)/$(PROJ).json --pcf icebreaker.pcf --asc $(BUILD_DIR)/$(PROJ).asc
+
+$(BUILD_DIR)/$(PROJ).bin: $(BUILD_DIR)/$(PROJ).asc
+	icepack $(BUILD_DIR)/$(PROJ).asc $(BUILD_DIR)/$(PROJ).bin
+
+prog: $(BUILD_DIR)/$(PROJ).bin
+	iceprog $(BUILD_DIR)/$(PROJ).bin
 
 clean:
-	rm -f blinky_switches.json blinky_switches.asc blinky_switches.bin
+	rm -f $(BUILD_DIR)/$(PROJ).json $(BUILD_DIR)/$(PROJ).asc $(BUILD_DIR)/$(PROJ).bin
+
+.PHONY: all prog clean

@@ -1,16 +1,25 @@
-all: led_chaser.bin
+# Build directory for artifacts
+BUILD_DIR = /tmp
 
-led_chaser.json: led_chaser.v
-	yosys -p "synth_ice40 -top led_chaser -json led_chaser.json" led_chaser.v
+PROJ = led_chaser
+DEVICE = up5k
+PACKAGE = sg48
 
-led_chaser.asc: led_chaser.json icebreaker.pcf
-	nextpnr-ice40 --up5k --package sg48 --json led_chaser.json --pcf icebreaker.pcf --asc led_chaser.asc
+all: $(BUILD_DIR)/$(PROJ).bin
 
-led_chaser.bin: led_chaser.asc
-	icepack led_chaser.asc led_chaser.bin
+$(BUILD_DIR)/$(PROJ).json: $(PROJ).v
+	yosys -p "synth_ice40 -top $(PROJ) -json $(BUILD_DIR)/$(PROJ).json" $(PROJ).v
 
-prog: led_chaser.bin
-	iceprog led_chaser.bin
+$(BUILD_DIR)/$(PROJ).asc: $(BUILD_DIR)/$(PROJ).json icebreaker.pcf
+	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --json $(BUILD_DIR)/$(PROJ).json --pcf icebreaker.pcf --asc $(BUILD_DIR)/$(PROJ).asc
+
+$(BUILD_DIR)/$(PROJ).bin: $(BUILD_DIR)/$(PROJ).asc
+	icepack $(BUILD_DIR)/$(PROJ).asc $(BUILD_DIR)/$(PROJ).bin
+
+prog: $(BUILD_DIR)/$(PROJ).bin
+	iceprog $(BUILD_DIR)/$(PROJ).bin
 
 clean:
-	rm -f led_chaser.json led_chaser.asc led_chaser.bin
+	rm -f $(BUILD_DIR)/$(PROJ).json $(BUILD_DIR)/$(PROJ).asc $(BUILD_DIR)/$(PROJ).bin
+
+.PHONY: all prog clean
