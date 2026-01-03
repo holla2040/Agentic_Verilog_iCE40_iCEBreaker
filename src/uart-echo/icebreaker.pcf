@@ -1,0 +1,42 @@
+# ============================================================================
+# iCEBreaker Pin Constraints for UART Echo Project
+# ============================================================================
+#
+# This file maps Verilog signal names to physical FPGA pins.
+#
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# SYSTEM CLOCK
+# ----------------------------------------------------------------------------
+# 12 MHz oscillator on the iCEBreaker board
+set_io clk 35
+
+# ----------------------------------------------------------------------------
+# UART RX PIN
+# ----------------------------------------------------------------------------
+# Pin 6 connects to the FT2232H USB-to-serial chip (Channel B, BDBUS1).
+# This is the FPGA's receive line - data flows FROM the PC TO the FPGA.
+#
+# When you type on your keyboard in a terminal program:
+#   Keyboard -> PC -> USB -> FT2232H -> Pin 6 -> FPGA
+set_io rx 6
+
+# ----------------------------------------------------------------------------
+# UART TX PIN
+# ----------------------------------------------------------------------------
+# Pin 9 connects to the FT2232H USB-to-serial chip (Channel B, BDBUS0).
+# This is the FPGA's transmit line - data flows FROM the FPGA TO the PC.
+#
+# When the FPGA sends data:
+#   FPGA -> Pin 9 -> FT2232H -> USB -> PC -> Terminal
+set_io tx 9
+
+# ----------------------------------------------------------------------------
+# LED OUTPUT
+# ----------------------------------------------------------------------------
+# Pin 37 is the green "accent" LED on the main iCEBreaker board.
+# Used as an activity indicator - toggles on each character received.
+set_io led 37
+
+# ============================================================================
