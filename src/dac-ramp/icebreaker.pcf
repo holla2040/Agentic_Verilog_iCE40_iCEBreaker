@@ -1,0 +1,44 @@
+# ============================================================================
+# iCEBreaker Pin Constraints for DAC Ramp Project
+# ============================================================================
+#
+# This file maps Verilog signal names to physical FPGA pins.
+#
+# PMOD DA2 (Digilent DAC module) connected to PMOD1A:
+#   - PMOD DA2 uses DAC121S101 12-bit DAC chips
+#   - Two channels available (A and B), we use channel A
+#   - SPI interface: SYNC (chip select), DIN (data), SCLK (clock)
+#
+# PMOD1A Pinout (top row, left to right):
+#   Pin 1 (P1A1) = FPGA Pin 4  -> SYNC
+#   Pin 2 (P1A2) = FPGA Pin 2  -> DINA (channel A data)
+#   Pin 3 (P1A3) = FPGA Pin 47 -> DINB (channel B data, unused)
+#   Pin 4 (P1A4) = FPGA Pin 45 -> SCLK
+#   Pin 5 = GND
+#   Pin 6 = VCC (3.3V)
+#
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# SYSTEM CLOCK
+# ----------------------------------------------------------------------------
+# 12 MHz oscillator on the iCEBreaker board
+set_io clk 35
+
+# ----------------------------------------------------------------------------
+# DAC SPI INTERFACE (PMOD DA2 on PMOD1A)
+# ----------------------------------------------------------------------------
+# SYNC - Chip select, active LOW
+# When SYNC goes low, the DAC starts accepting serial data.
+# Data is latched on the 16th falling clock edge.
+set_io dac_sync_n 4
+
+# DIN - Serial data input for DAC channel A
+# Data is clocked into the DAC on falling edges of SCLK.
+# 16 bits total: [XX][PD1:PD0][D11:D0] MSB first
+set_io dac_din 2
+
+# SCLK - SPI clock
+# Data is sampled by the DAC on the falling edge of SCLK.
+# Maximum frequency: 30 MHz
+set_io dac_sclk 45
