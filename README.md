@@ -81,7 +81,8 @@ Reference materials in `docs/`:
 │   ├── uart-rx/         # UART receiver - LED control from keyboard
 │   ├── uart-echo/       # UART echo with case toggle
 │   ├── freq-counter/    # Frequency counter with selectable generator
-│   └── dac-ramp/        # DAC triangle wave generator with PLL
+│   ├── dac-ramp/        # DAC triangle wave generator with PLL
+│   └── adc-read/        # ADC reader with UART output
 ├── docs/                # Component datasheets and reference materials
 │   ├── ad7476a.pdf             # AD7476A 12-bit ADC datasheet
 │   ├── ads1115.pdf             # ADS1115 16-bit ADC datasheet
@@ -179,6 +180,16 @@ Generates a triangular ramp waveform on the PMOD DA2 (DAC121S101) output. The vo
 - Triangle wave generation with direction flag
 
 **Testing:** Connect PMOD DA2 to PMOD1A, `make prog`, view output on oscilloscope (J2 pins 1-2 for channel A).
+
+### ADC-Read
+Reads analog values from the PMOD AD1 (AD7476A) and displays them via UART. Samples the ADC 10 times per second and sends hex-formatted readings to the PC. Demonstrates:
+- SPI master interface for reading (vs. writing in DAC project)
+- AD7476A 12-bit ADC protocol (data clocked out on falling SCLK edges)
+- Binary to hex ASCII conversion
+- State machine handshaking between ADC and UART controllers
+- UART transmission at 115200 baud
+
+**Testing:** Connect PMOD AD1 to PMOD1B, `make prog`, then `screen /dev/ttyUSB1 115200`. Apply 0-3.3V signal to A0 input.
 
 ## Using Claude Code for Verilog Generation
 

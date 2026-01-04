@@ -1,0 +1,27 @@
+# =============================================================================
+# Pin Constraints for ADC Reader Project
+# =============================================================================
+# Target: iCEBreaker v1.0b FPGA board with PMOD AD1 on PMOD1B
+#
+# PMOD AD1 contains two AD7476A 12-bit ADCs. We use channel 0 (D0).
+# The module uses an SPI-like interface to read conversion results.
+#
+# PMOD1B Pinout (directly from iCEBreaker reference):
+#   Pin 1 (P1B1) = FPGA Pin 43 = CS   (directly active, directly active low)
+#   Pin 2 (P1B2) = FPGA Pin 38 = D0   (data output from ADC channel 0)
+#   Pin 3 (P1B3) = FPGA Pin 34 = D1   (data output from ADC channel 1, unused)
+#   Pin 4 (P1B4) = FPGA Pin 31 = CLK  (SPI clock input to ADC)
+#   Pin 5        = GND
+#   Pin 6        = VCC (3.3V)
+# =============================================================================
+
+# System clock - 12 MHz oscillator on iCEBreaker
+set_io clk 35
+
+# ADC SPI interface (directly PMOD1B)
+set_io adc_cs_n  43    # Chip select (active low) - directly PMOD1B pin 1
+set_io adc_sdata 38    # Serial data from ADC (MISO) - directly PMOD1B pin 2
+set_io adc_sclk  31    # Serial clock to ADC - directly PMOD1B pin 4
+
+# UART output to PC via USB-serial chip
+set_io uart_tx 9       # TX pin (directly directly directly sends to PC)
