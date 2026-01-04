@@ -52,28 +52,28 @@ Combine DAC and ADC projects into a loopback test system. DAC outputs triangle w
   - [x] Direction flag for triangle wave
   - [x] Boundary logic (toggle direction at 0 and 4095)
 - [x] Build and verify with `make`
-- [ ] **USER TEST**: Verify triangle wave on oscilloscope (60s cycle)
+- [x] **USER TEST**: Verify triangle wave on oscilloscope (60s cycle)
 
-**STOP HERE** - Wait for user to verify DAC output before proceeding to Phase 2.
+**VERIFIED** - DAC output confirmed working. Proceeding to Phase 2.
 
 ---
 
 ### Phase 2: Add ADC Sampling
-- [ ] Add ADC pins to `icebreaker.pcf` (adc_cs_n, adc_sdata, adc_sclk)
-- [ ] Add ADC ports to module declaration
-- [ ] Add 10 Hz interval timer (21-bit counter to 1,200,000)
-- [ ] Add ADC state machine (IDLE → START → SHIFT → DONE)
-- [ ] Add `adc_result[11:0]` register to store readings
-- [ ] Build and verify with `make`
+- [x] Add ADC pins to `icebreaker.pcf` (adc_cs_n, adc_sdata, adc_sclk)
+- [x] Add ADC ports to module declaration
+- [x] Add 10 Hz interval timer (21-bit counter to 1,200,000)
+- [x] Add ADC state machine (IDLE → START → SHIFT → DONE)
+- [x] Add `adc_result[11:0]` register to store readings
+- [x] Build and verify with `make`
 
 ### Phase 3: Add UART Output
-- [ ] Add uart_tx pin to `icebreaker.pcf`
-- [ ] Add uart_tx port to module declaration
-- [ ] Add `hex_to_ascii` function
-- [ ] Add message buffer for `0xNNN\r\n` (7 characters)
-- [ ] Add UART state machine (IDLE → START → DATA → STOP)
-- [ ] Add handshake between ADC and UART (uart_start_request, uart_busy)
-- [ ] Build with `make`
+- [x] Add uart_tx pin to `icebreaker.pcf`
+- [x] Add uart_tx port to module declaration
+- [x] Add `hex_to_ascii` function
+- [x] Add message buffer for `0xNNN\r\n` (7 characters)
+- [x] Add UART state machine (IDLE → START → DATA → STOP)
+- [x] Add handshake between ADC and UART (uart_start_request, uart_busy)
+- [x] Build with `make`
 - [ ] **USER TEST**: Program and verify with `screen /dev/ttyUSB1 115200`
 
 ### Final Verification

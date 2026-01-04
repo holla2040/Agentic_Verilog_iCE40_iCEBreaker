@@ -29,3 +29,20 @@ set_io dac_din 2
 
 # SCLK - SPI clock
 set_io dac_sclk 45
+
+# ----------------------------------------------------------------------------
+# ADC SPI INTERFACE (PMOD AD1 on PMOD1B)
+# ----------------------------------------------------------------------------
+# CS - Chip select, active LOW (triggers conversion on falling edge)
+set_io adc_cs_n 43
+
+# SDATA - Serial data FROM ADC (MISO)
+set_io adc_sdata 38
+
+# SCLK - SPI clock to ADC
+set_io adc_sclk 31
+
+# ----------------------------------------------------------------------------
+# UART OUTPUT (to USB serial chip)
+# ----------------------------------------------------------------------------
+set_io uart_tx 9
