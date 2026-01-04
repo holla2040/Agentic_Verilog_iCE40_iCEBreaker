@@ -3,8 +3,7 @@
 // ============================================================================
 //
 // This module generates a triangular ramp waveform on the PMOD DA2's DAC
-// output. The output voltage ramps from 0V to 3.3V and back down continuously,
-// completing a full cycle in approximately 1 second.
+// output. The output voltage ramps from 0V to 3.3V and back down continuously.
 //
 // HARDWARE: PMOD DA2 (Digilent) connected to iCEBreaker PMOD1A
 //   - Contains two DAC121S101 12-bit DACs (we use channel A)
@@ -21,16 +20,17 @@
 //   - DAC output updates on the 16th falling clock edge
 //   - SYNC returns HIGH after transfer completes
 //
-// TIMING (12 MHz system clock, MAXIMUM SPEED MODE):
-//   - SPI clock: 6 MHz (fastest possible from 12 MHz system clock)
-//   - 16-bit transfer: ~2.7 microseconds
-//   - Update rate: ~300,000 updates/second
-//   - Triangle wave frequency: ~39 Hz (8192 steps per cycle)
+// TIMING (60 MHz PLL clock, 30 MHz SPI):
+//   - PLL generates 60 MHz from 12 MHz input
+//   - SPI clock: 30 MHz (DAC121S101 max is 30 MHz)
+//   - 16-bit transfer: ~533 nanoseconds
+//   - Update rate: ~1,660,000 updates/second
+//   - Triangle wave frequency: ~200 Hz (8192 steps per cycle)
 //
 // ============================================================================
 
 module dac_ramp (
-    input  wire clk,           // 12 MHz system clock
+    input  wire clk,           // 12 MHz system clock (feeds PLL)
 
     // DAC SPI interface (directly active)
     output reg  dac_sync_n,    // Chip select (active LOW)
@@ -39,28 +39,61 @@ module dac_ramp (
 );
 
     // ========================================================================
-    // TIMING PARAMETERS - MAXIMUM SPEED MODE
+    // PLL: Generate 60 MHz from 12 MHz input
     // ========================================================================
     //
-    // System clock: 12 MHz
-    // SPI clock: 6 MHz (divide by 2) - fastest possible with 12 MHz system clock
-    // DAC121S101 max is 30 MHz, so 6 MHz is well within spec.
+    // The iCE40 UP5K has a single PLL that can multiply/divide the input clock.
+    // We use SB_PLL40_PAD since the clock comes directly from an input pad.
+    //
+    // PLL Parameters (calculated by icepll -i 12 -o 60):
+    //   DIVR = 0   (reference divider)
+    //   DIVF = 79  (feedback divider)
+    //   DIVQ = 4   (output divider = 2^4 = 16)
+    //   F_VCO = 960 MHz (within 533-1066 MHz range)
+    //   F_OUT = 12 MHz * 80 / 16 = 60 MHz
+    //
+    // With 60 MHz clock, we can run SPI at 30 MHz (toggle every clock).
+    //
+
+    wire clk_60mhz;            // 60 MHz PLL output
+    wire pll_locked;           // PLL lock indicator
+
+    SB_PLL40_PAD #(
+        .FEEDBACK_PATH("SIMPLE"),
+        .DIVR(4'b0000),        // DIVR = 0
+        .DIVF(7'b1001111),     // DIVF = 79
+        .DIVQ(3'b100),         // DIVQ = 4
+        .FILTER_RANGE(3'b001)  // FILTER_RANGE = 1
+    ) pll_inst (
+        .PACKAGEPIN(clk),      // Clock input from package pin
+        .PLLOUTCORE(clk_60mhz),
+        .LOCK(pll_locked),
+        .RESETB(1'b1),
+        .BYPASS(1'b0)
+    );
+
+    // ========================================================================
+    // TIMING PARAMETERS - 30 MHz SPI MODE
+    // ========================================================================
+    //
+    // PLL output clock: 60 MHz
+    // SPI clock: 30 MHz (divide by 2) - maximum for DAC121S101
     //
     // Timing calculation:
-    //   - SPI half-period: 1 system clock (83.3 ns)
-    //   - Full SPI clock cycle: 2 system clocks
-    //   - 16 bits per transfer: 32 system clocks
+    //   - SPI half-period: 1 PLL clock (16.7 ns)
+    //   - Full SPI clock cycle: 2 PLL clocks (33.3 ns)
+    //   - 16 bits per transfer: 32 PLL clocks
     //   - State machine overhead: ~4 clocks
-    //   - Total per transfer: ~36 clocks = 3 µs
-    //   - Update rate: 12 MHz / 36 ≈ 333,000 updates/sec
+    //   - Total per transfer: ~36 clocks = 600 ns
+    //   - Update rate: 60 MHz / 36 ≈ 1,660,000 updates/sec
     //
     // Triangle wave (step by 1):
     //   - Steps per cycle: 8192 (4096 up + 4096 down)
-    //   - Frequency: 333,000 / 8192 ≈ 40 Hz
+    //   - Frequency: 1,660,000 / 8192 ≈ 200 Hz
     //
-    // Expected on oscilloscope: ~40 Hz triangle wave, 0V to 3.3V
+    // Expected on oscilloscope: ~200 Hz triangle wave, 0V to 3.3V
 
-    localparam SPI_HALF_PERIOD = 1;      // Fastest: toggle every clock (6 MHz SPI)
+    localparam SPI_HALF_PERIOD = 1;      // Toggle every clock (30 MHz SPI from 60 MHz)
 
     // ========================================================================
     // STATE MACHINE DEFINITIONS
@@ -93,10 +126,10 @@ module dac_ramp (
     reg [3:0]  clk_div = 4'd0;           // Clock divider counter
 
     // ========================================================================
-    // MAIN STATE MACHINE
+    // MAIN STATE MACHINE (runs on 60 MHz PLL clock)
     // ========================================================================
 
-    always @(posedge clk) begin
+    always @(posedge clk_60mhz) begin
         case (state)
             // ----------------------------------------------------------------
             // IDLE STATE: Immediately start next transfer (max speed mode)
