@@ -82,7 +82,8 @@ Reference materials in `docs/`:
 │   ├── uart-echo/       # UART echo with case toggle
 │   ├── freq-counter/    # Frequency counter with selectable generator
 │   ├── dac-ramp/        # DAC triangle wave generator with PLL
-│   └── adc-read/        # ADC reader with UART output
+│   ├── adc-read/        # ADC reader with UART output
+│   └── dac-adc-loopback/ # DAC-ADC loopback with modular design
 ├── docs/                # Component datasheets and reference materials
 │   ├── ad7476a.pdf             # AD7476A 12-bit ADC datasheet
 │   ├── ads1115.pdf             # ADS1115 16-bit ADC datasheet
@@ -190,6 +191,16 @@ Reads analog values from the PMOD AD1 (AD7476A) and displays them via UART. Samp
 - UART transmission at 115200 baud
 
 **Testing:** Connect PMOD AD1 to PMOD1B, `make prog`, then `screen /dev/ttyUSB1 115200`. Apply 0-3.3V signal to A0 input.
+
+### DAC-ADC-Loopback
+Generates a slow triangle wave on the DAC and reads it back via the ADC, demonstrating both analog output and input with UART monitoring. This project showcases **modular Verilog design** with separate reusable components. Demonstrates:
+- Modular design with separate files for SPI DAC, SPI ADC, UART TX, and triangle generator
+- Module instantiation and parameterization
+- Reusable components that can be copied to other projects
+- Analog loopback testing (verifying DAC output with ADC input)
+- Combined SPI write (DAC) and SPI read (ADC) in one project
+
+**Testing:** Connect PMOD DA2 to PMOD1A, PMOD AD1 to PMOD1B, wire DAC output to ADC input, `make prog`, then `screen /dev/ttyUSB1 115200`. Watch ADC readings track the 60-second triangle wave.
 
 ## Using Claude Code for Verilog Generation
 
