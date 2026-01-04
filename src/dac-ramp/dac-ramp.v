@@ -21,10 +21,11 @@
 //   - DAC output updates on the 16th falling clock edge
 //   - SYNC returns HIGH after transfer completes
 //
-// TIMING (12 MHz system clock):
-//   - SPI clock: 1 MHz (divide by 12)
-//   - 16-bit transfer: ~16 microseconds
-//   - Ramp step rate: ~8192 steps/second for 1 Hz triangle wave
+// TIMING (12 MHz system clock, MAXIMUM SPEED MODE):
+//   - SPI clock: 6 MHz (fastest possible from 12 MHz system clock)
+//   - 16-bit transfer: ~2.7 microseconds
+//   - Update rate: ~300,000 updates/second
+//   - Triangle wave frequency: ~39 Hz (8192 steps per cycle)
 //
 // ============================================================================
 
@@ -38,42 +39,38 @@ module dac_ramp (
 );
 
     // ========================================================================
-    // TIMING PARAMETERS
+    // TIMING PARAMETERS - MAXIMUM SPEED MODE
     // ========================================================================
     //
-    // MAXIMUM SPEED MODE
-    //
-    // System clock: 12 MHz = 12,000,000 Hz
+    // System clock: 12 MHz
     // SPI clock: 6 MHz (divide by 2) - fastest possible with 12 MHz system clock
-    // DAC121S101 max is 30 MHz, so we're well within spec
+    // DAC121S101 max is 30 MHz, so 6 MHz is well within spec.
     //
-    // 16-bit transfer at 6 MHz = ~2.67 µs per update
-    // Maximum update rate: ~375,000 updates/second
+    // Timing calculation:
+    //   - SPI half-period: 1 system clock (83.3 ns)
+    //   - Full SPI clock cycle: 2 system clocks
+    //   - 16 bits per transfer: 32 system clocks
+    //   - State machine overhead: ~4 clocks
+    //   - Total per transfer: ~36 clocks = 3 µs
+    //   - Update rate: 12 MHz / 36 ≈ 333,000 updates/sec
     //
-    // With step size of 16:
-    //   Steps per direction: 4096 / 16 = 256
-    //   Steps per full cycle: 512
-    //   Cycle frequency: 375,000 / 512 ≈ 732 Hz triangle wave
+    // Triangle wave (step by 1):
+    //   - Steps per cycle: 8192 (4096 up + 4096 down)
+    //   - Frequency: 333,000 / 8192 ≈ 40 Hz
     //
-    // The ramp runs as fast as the SPI can transfer!
+    // Expected on oscilloscope: ~40 Hz triangle wave, 0V to 3.3V
 
     localparam SPI_HALF_PERIOD = 1;      // Fastest: toggle every clock (6 MHz SPI)
-    localparam RAMP_STEP = 16;           // Increment by 16 for ~700 Hz triangle wave
-    // Try these values for different speeds:
-    //   RAMP_STEP = 1   -> ~37 Hz  (smooth but slow)
-    //   RAMP_STEP = 4   -> ~150 Hz
-    //   RAMP_STEP = 16  -> ~700 Hz (default - nice on scope)
-    //   RAMP_STEP = 64  -> ~2.8 kHz (very fast)
 
     // ========================================================================
     // STATE MACHINE DEFINITIONS
     // ========================================================================
     //
-    // The SPI controller uses a simple state machine:
-    //   IDLE:  Waiting for next transfer (SYNC high, counting down interval)
-    //   LOAD:  Prepare shift register, assert SYNC low
-    //   SHIFT: Clock out 16 bits on falling SCLK edges
-    //   DONE:  Release SYNC high, prepare for next transfer
+    // The SPI controller uses a simple state machine running at max speed:
+    //   IDLE:  Brief pause, SYNC high (1 clock)
+    //   LOAD:  Prepare shift register, assert SYNC low (1 clock)
+    //   SHIFT: Clock out 16 bits on falling SCLK edges (32 clocks)
+    //   DONE:  Release SYNC high, update ramp value (1 clock)
 
     localparam STATE_IDLE  = 2'd0;
     localparam STATE_LOAD  = 2'd1;
@@ -95,9 +92,6 @@ module dac_ramp (
     reg [3:0]  bit_count = 4'd0;         // Count of bits shifted (0-15)
     reg [3:0]  clk_div = 4'd0;           // Clock divider counter
 
-    // Timing
-    reg [10:0] interval_count = 11'd0;   // Counter for pacing DAC updates
-
     // ========================================================================
     // MAIN STATE MACHINE
     // ========================================================================
@@ -105,18 +99,12 @@ module dac_ramp (
     always @(posedge clk) begin
         case (state)
             // ----------------------------------------------------------------
-            // IDLE STATE: Wait for interval timer, then start next transfer
+            // IDLE STATE: Immediately start next transfer (max speed mode)
             // ----------------------------------------------------------------
             STATE_IDLE: begin
                 dac_sync_n <= 1'b1;      // SYNC high (inactive)
                 dac_sclk <= 1'b1;        // SCLK idles high (Mode 3 style)
-
-                if (interval_count >= RAMP_INTERVAL - 1) begin
-                    interval_count <= 11'd0;
-                    state <= STATE_LOAD;
-                end else begin
-                    interval_count <= interval_count + 1'b1;
-                end
+                state <= STATE_LOAD;     // Go immediately to next transfer
             end
 
             // ----------------------------------------------------------------
