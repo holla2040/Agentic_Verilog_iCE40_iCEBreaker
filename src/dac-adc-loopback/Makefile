@@ -19,14 +19,15 @@
 BUILD_DIR = /tmp
 
 PROJ = dac_adc_loopback
-SRC = dac-adc-loopback.v
+TOP = top
+SRC = top.v spi_dac.v spi_adc.v uart_tx.v triangle_gen.v
 DEVICE = up5k
 PACKAGE = sg48
 
 all: $(BUILD_DIR)/$(PROJ).bin
 
 $(BUILD_DIR)/$(PROJ).json: $(SRC)
-	yosys -p "synth_ice40 -top $(PROJ) -json $(BUILD_DIR)/$(PROJ).json" $(SRC)
+	yosys -p "synth_ice40 -top $(TOP) -json $(BUILD_DIR)/$(PROJ).json" $(SRC)
 
 $(BUILD_DIR)/$(PROJ).asc: $(BUILD_DIR)/$(PROJ).json icebreaker.pcf
 	nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) --json $(BUILD_DIR)/$(PROJ).json --pcf icebreaker.pcf --asc $(BUILD_DIR)/$(PROJ).asc
