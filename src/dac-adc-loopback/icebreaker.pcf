@@ -1,0 +1,31 @@
+# ============================================================================
+# iCEBreaker Pin Constraints for DAC-ADC Loopback Project
+# ============================================================================
+#
+# Phase 1: DAC pins only (PMOD DA2 on PMOD1A)
+#
+# PMOD1A Pinout (top row, left to right):
+#   Pin 1 (P1A1) = FPGA Pin 4  -> SYNC
+#   Pin 2 (P1A2) = FPGA Pin 2  -> DINA (channel A data)
+#   Pin 3 (P1A3) = FPGA Pin 47 -> DINB (channel B data, unused)
+#   Pin 4 (P1A4) = FPGA Pin 45 -> SCLK
+#
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# SYSTEM CLOCK
+# ----------------------------------------------------------------------------
+# 12 MHz oscillator on the iCEBreaker board
+set_io clk 35
+
+# ----------------------------------------------------------------------------
+# DAC SPI INTERFACE (PMOD DA2 on PMOD1A)
+# ----------------------------------------------------------------------------
+# SYNC - Chip select, active LOW
+set_io dac_sync_n 4
+
+# DIN - Serial data input for DAC channel A
+set_io dac_din 2
+
+# SCLK - SPI clock
+set_io dac_sclk 45
