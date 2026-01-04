@@ -383,18 +383,22 @@ module dac_adc_loopback (
             // ----------------------------------------------------------------
             // DONE: Store result and trigger UART transmission
             // ----------------------------------------------------------------
+            // Note: Due to SPI timing, we capture bits 1-16 instead of 0-15.
+            // The first bit (output when CS falls) is missed because we
+            // create a falling edge before sampling. To compensate, we
+            // extract bits [12:1] instead of [11:0].
             ADC_DONE: begin
                 adc_cs_n <= 1'b1;        // Release CS high
 
-                // Extract 12-bit result (lower 12 bits of 16-bit frame)
-                adc_result <= adc_shift_reg[11:0];
+                // Extract 12-bit result (shifted by 1 to compensate for timing)
+                adc_result <= adc_shift_reg[12:1];
 
                 // Build the message: "0xNNN\r\n"
                 message[0] <= "0";
                 message[1] <= "x";
-                message[2] <= hex_to_ascii(adc_shift_reg[11:8]);
-                message[3] <= hex_to_ascii(adc_shift_reg[7:4]);
-                message[4] <= hex_to_ascii(adc_shift_reg[3:0]);
+                message[2] <= hex_to_ascii(adc_shift_reg[12:9]);
+                message[3] <= hex_to_ascii(adc_shift_reg[8:5]);
+                message[4] <= hex_to_ascii(adc_shift_reg[4:1]);
                 message[5] <= 8'h0D;     // \r (carriage return)
                 message[6] <= 8'h0A;     // \n (newline)
 
