@@ -80,7 +80,8 @@ Reference materials in `docs/`:
 │   ├── uart-tx/         # UART transmitter - sends "Hello" to PC
 │   ├── uart-rx/         # UART receiver - LED control from keyboard
 │   ├── uart-echo/       # UART echo with case toggle
-│   └── freq-counter/    # Frequency counter with selectable generator
+│   ├── freq-counter/    # Frequency counter with selectable generator
+│   └── dac-ramp/        # DAC triangle wave generator with PLL
 ├── docs/                # Component datasheets and reference materials
 │   ├── ad7476a.pdf             # AD7476A 12-bit ADC datasheet
 │   ├── ads1115.pdf             # ADS1115 16-bit ADC datasheet
@@ -168,6 +169,16 @@ A frequency counter with a selectable frequency generator. The generator outputs
 **Maximum measurable frequency:** ~3 MHz (limited by 12 MHz clock and edge detection)
 
 **Testing:** Connect PMOD 1A pin 1 to pin 7 with a jumper, `make prog`, then `screen /dev/ttyUSB1 115200`. Press buttons to change generator frequency.
+
+### DAC-Ramp
+Generates a triangular ramp waveform on the PMOD DA2 (DAC121S101) output. The voltage ramps smoothly from 0V to 3.3V and back at ~200 Hz. Demonstrates:
+- PLL instantiation (SB_PLL40_PAD) to generate 60 MHz from 12 MHz input
+- SPI master interface at 30 MHz (DAC121S101 maximum speed)
+- DAC121S101 16-bit word protocol
+- State machine for SPI control
+- Triangle wave generation with direction flag
+
+**Testing:** Connect PMOD DA2 to PMOD1A, `make prog`, view output on oscilloscope (J2 pins 1-2 for channel A).
 
 ## Using Claude Code for Verilog Generation
 
