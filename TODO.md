@@ -137,9 +137,27 @@ src/i2c-ads1115/
 ```
 ADS1115 I2C Demo
 Reading channel 0...
-Raw: 0x7FFF  Voltage: 3.300V
-Raw: 0x4000  Voltage: 1.650V
-Raw: 0x0000  Voltage: 0.000V
+Raw: 0x7FFF  Voltage: 3300mV
+Raw: 0x4000  Voltage: 1650mV
+Raw: 0x0000  Voltage: 0000mV
+```
+
+**Voltage display - NO floating point!**
+FPGAs don't have floating point hardware. We use integer math:
+```verilog
+// ADS1115 is 16-bit, full scale ±4.096V (default PGA)
+// For single-ended 0-3.3V input:
+// millivolts = (raw_value * 3300) / 32768
+//
+// Example: raw = 0x4000 = 16384
+// millivolts = (16384 * 3300) / 32768 = 1650
+// Display as "1650mV" or "1.650V" (insert decimal in ASCII)
+
+wire [31:0] millivolts;
+assign millivolts = (raw_adc * 32'd3300) >> 15;  // Divide by 32768
+
+// Convert to ASCII digits for UART output
+// 1650 → '1', '6', '5', '0', 'm', 'V'
 ```
 
 **References**:
@@ -1127,19 +1145,335 @@ src/uart-tx/
 
 ---
 
-### 11. PWM Servo Control
+### 11. Dual Stepper Motor Motion Control (GRBL-style)
 
-**Why**: Extends PWM-Breathe to real-world application
+**Concept**: FPGA-based CNC/3D printer style motion controller with coordinated 2-axis movement
 
-**What to cover**:
-- Servo PWM timing (1-2ms pulse, 20ms period)
-- Position control
-- Smooth movement (acceleration)
-- Multi-servo control
+**Why this is valuable**:
+- Real-world application (CNC, 3D printers, laser cutters)
+- Teaches precise timing and pulse generation
+- Demonstrates FPGA advantage: deterministic real-time control
+- Introduces motion planning concepts (acceleration profiles)
+- Step/direction interface works with standard stepper drivers (A4988, DRV8825, TMC2209)
 
-**Hardware**: Standard hobby servo (~$3)
+**Key features**:
+- 2 independent axes (X, Y) with step/direction outputs
+- Configurable steps per unit
+- Trapezoidal velocity profile (acceleration/cruise/deceleration)
+- Coordinated motion (both axes reach target simultaneously)
+- Real-time pulse generation (no jitter, unlike microcontroller)
 
-**Demo**: Potentiometer controls servo position via ADC
+**Why FPGA beats microcontrollers here**:
+- Deterministic timing: every step pulse is exactly on time
+- No interrupt latency or jitter
+- Can generate very high step rates (100kHz+)
+- Parallel processing: both axes truly simultaneous
+- Hardware acceleration for Bresenham algorithm
+
+#### Motion Profile: Trapezoidal Velocity
+
+```
+Velocity
+    ^
+    |      ___________
+    |     /           \
+    |    /             \
+    |   /               \
+    |  /                 \
+    |_/___________________\__> Time
+      Accel  Cruise  Decel
+```
+
+**Parameters per axis**:
+- `target_position` - Where to go (in steps)
+- `max_velocity` - Maximum step rate (steps/sec)
+- `acceleration` - Ramp rate (steps/sec²)
+
+#### Core Architecture
+
+```verilog
+module motion_controller #(
+    parameter CLOCK_FREQ = 12_000_000,  // 12 MHz
+    parameter STEP_BITS = 32,            // Position resolution
+    parameter VEL_BITS = 24              // Velocity resolution
+)(
+    input  wire        clk,
+    input  wire        rst,
+    // Command interface
+    input  wire        start,
+    input  wire signed [STEP_BITS-1:0] target_x,
+    input  wire signed [STEP_BITS-1:0] target_y,
+    input  wire [VEL_BITS-1:0] max_velocity,    // Steps per second
+    input  wire [VEL_BITS-1:0] acceleration,    // Steps per second²
+    output reg         busy,
+    output reg         done,
+    // Stepper outputs - directly to driver
+    output reg         step_x,
+    output reg         dir_x,
+    output reg         step_y,
+    output reg         dir_y,
+    // Optional: enable outputs
+    output reg         enable_x,
+    output reg         enable_y
+);
+```
+
+#### Step Generator Module
+
+```verilog
+// Generates step pulses at variable frequency with acceleration
+module step_generator #(
+    parameter CLOCK_FREQ = 12_000_000
+)(
+    input  wire        clk,
+    input  wire        rst,
+    input  wire        enable,
+    // Motion parameters
+    input  wire [31:0] steps_remaining,
+    input  wire [23:0] current_velocity,  // Steps/sec (fixed point)
+    input  wire [23:0] target_velocity,
+    input  wire [23:0] acceleration,
+    // Outputs
+    output reg         step_pulse,
+    output reg  [23:0] velocity_out,
+    output reg         step_done
+);
+    // DDA (Digital Differential Analyzer) for step timing
+    // Accumulator-based approach for fractional step rates
+
+    reg [31:0] step_accumulator;
+    wire [31:0] step_increment;
+
+    // Convert velocity (steps/sec) to accumulator increment
+    // increment = velocity * 2^32 / CLOCK_FREQ
+    assign step_increment = (current_velocity << 20) / (CLOCK_FREQ >> 12);
+
+    always @(posedge clk) begin
+        step_pulse <= 1'b0;  // Default: no pulse
+
+        if (enable && steps_remaining > 0) begin
+            // Accumulate
+            {step_pulse, step_accumulator} <= step_accumulator + step_increment;
+
+            // Update velocity (acceleration)
+            if (current_velocity < target_velocity)
+                velocity_out <= current_velocity + accel_increment;
+            else if (current_velocity > target_velocity)
+                velocity_out <= current_velocity - accel_increment;
+        end
+    end
+endmodule
+```
+
+#### Bresenham Line Algorithm for Coordinated Motion
+
+```verilog
+// Ensures both axes arrive at target simultaneously
+module line_interpolator (
+    input  wire        clk,
+    input  wire        rst,
+    input  wire        start,
+    input  wire [31:0] delta_x,      // Absolute distance X
+    input  wire [31:0] delta_y,      // Absolute distance Y
+    input  wire        step_trigger,  // Master step clock
+    output reg         step_x,
+    output reg         step_y
+);
+    reg [31:0] error;
+    wire [31:0] major_axis, minor_axis;
+    wire x_is_major;
+
+    assign x_is_major = (delta_x >= delta_y);
+    assign major_axis = x_is_major ? delta_x : delta_y;
+    assign minor_axis = x_is_major ? delta_y : delta_x;
+
+    always @(posedge clk) begin
+        if (start) begin
+            error <= major_axis >> 1;
+        end else if (step_trigger) begin
+            // Major axis always steps
+            if (x_is_major) step_x <= 1'b1;
+            else            step_y <= 1'b1;
+
+            // Minor axis steps when error accumulates
+            if (error < minor_axis) begin
+                error <= error + major_axis - minor_axis;
+                if (x_is_major) step_y <= 1'b1;
+                else            step_x <= 1'b1;
+            end else begin
+                error <= error - minor_axis;
+            end
+        end
+    end
+endmodule
+```
+
+#### Command Interface: Binary Protocol via UART
+
+**Why binary, not G-code text?**
+- Parsing text ("G1 X100 Y50") requires complex state machines
+- Variable-length number parsing uses many LUTs
+- ASCII-to-integer conversion adds overhead
+- G-code parsing is trivial for MCUs, wasteful for FPGAs
+
+**Binary packet format (13 bytes)**:
+```
+Byte 0:     Command (0x01 = Move, 0x02 = Home, 0x03 = Stop, 0x04 = Status)
+Bytes 1-4:  X target position (signed 32-bit, little-endian)
+Bytes 5-8:  Y target position (signed 32-bit, little-endian)
+Bytes 9-10: Velocity (unsigned 16-bit, steps/sec)
+Bytes 11-12: Acceleration (unsigned 16-bit, steps/sec²)
+```
+
+**Example: Move to X=1000, Y=500 at 2000 steps/sec**:
+```
+TX: 01 E8 03 00 00 F4 01 00 00 D0 07 E8 03
+    ^  ^-------^  ^-------^  ^---^  ^---^
+    |  X=1000     Y=500      V=2000 A=1000
+    CMD=Move
+```
+
+**Verilog packet receiver**:
+```verilog
+module uart_cmd_receiver (
+    input  wire        clk,
+    input  wire        rst,
+    input  wire [7:0]  rx_data,
+    input  wire        rx_valid,
+    // Decoded command output
+    output reg  [7:0]  cmd,
+    output reg signed [31:0] target_x,
+    output reg signed [31:0] target_y,
+    output reg  [15:0] velocity,
+    output reg  [15:0] acceleration,
+    output reg         cmd_valid
+);
+    reg [3:0] byte_count;
+    reg [103:0] packet_buffer;  // 13 bytes = 104 bits
+
+    always @(posedge clk) begin
+        cmd_valid <= 1'b0;
+
+        if (rst) begin
+            byte_count <= 0;
+        end else if (rx_valid) begin
+            // Shift in new byte
+            packet_buffer <= {rx_data, packet_buffer[103:8]};
+            byte_count <= byte_count + 1;
+
+            // Full packet received
+            if (byte_count == 12) begin
+                cmd          <= packet_buffer[7:0];
+                target_x     <= packet_buffer[39:8];
+                target_y     <= packet_buffer[71:40];
+                velocity     <= packet_buffer[87:72];
+                acceleration <= packet_buffer[103:88];
+                cmd_valid    <= 1'b1;
+                byte_count   <= 0;
+            end
+        end
+    end
+endmodule
+```
+
+**Response packet (5 bytes)**:
+```
+Byte 0:   Status (0x00=Idle, 0x01=Moving, 0x02=Error)
+Bytes 1-2: Current X position (lower 16 bits)
+Bytes 3-4: Current Y position (lower 16 bits)
+```
+
+**PC-side Python example**:
+```python
+import serial
+import struct
+
+ser = serial.Serial('/dev/ttyUSB0', 115200)
+
+def move_to(x, y, velocity=2000, accel=1000):
+    packet = struct.pack('<BiiHH', 0x01, x, y, velocity, accel)
+    ser.write(packet)
+
+def wait_idle():
+    while True:
+        ser.write(b'\x04' + b'\x00'*12)  # Status request
+        resp = ser.read(5)
+        if resp[0] == 0x00:  # Idle
+            break
+
+# Draw a square
+move_to(1000, 0)
+wait_idle()
+move_to(1000, 1000)
+wait_idle()
+move_to(0, 1000)
+wait_idle()
+move_to(0, 0)
+wait_idle()
+```
+
+**Alternative: MCU frontend for G-code**
+If you want G-code, use an MCU to parse it:
+```
+PC (G-code) → UART → STM32 (parses G-code, plans motion) → SPI/binary → FPGA (real-time steps)
+```
+The MCU handles text parsing and motion planning (easy in C), while the FPGA handles deterministic step generation (hard in software, trivial in hardware).
+
+**Suggested structure**:
+```
+src/stepper-motion/
+├── top.v                 # Main module, I/O
+├── motion_controller.v   # Coordinates both axes
+├── step_generator.v      # Single axis step/accel
+├── line_interpolator.v   # Bresenham for coordinated motion
+├── velocity_profile.v    # Trapezoidal acceleration calc
+├── uart_cmd.v            # Optional: UART command parser
+├── uart_tx.v             # Status output
+├── icebreaker.pcf
+├── README.md
+└── Makefile
+```
+
+**Hardware needed**:
+- 2x Stepper motors (NEMA 17 common)
+- 2x Stepper drivers (A4988, DRV8825, or TMC2209)
+- 12-24V power supply for motors
+- Jumper wires
+
+**Pin connections**:
+```
+iCEBreaker          Stepper Driver
+----------          --------------
+PMOD pin  -->       STEP
+PMOD pin  -->       DIR
+PMOD pin  -->       ENABLE (optional)
+GND       ---       GND
+```
+
+**Demo progression**:
+1. Single axis: move 1000 steps with acceleration
+2. Dual axis: diagonal line (coordinated)
+3. Square pattern: sequential moves
+4. Circle approximation: many small coordinated moves
+5. UART control: send G-code style commands
+
+**Performance targets**:
+- Step rate: up to 200 kHz (vs ~50 kHz typical for Arduino GRBL)
+- Position resolution: 32-bit (4 billion steps)
+- Acceleration update rate: every clock cycle (no staircase effect)
+
+**Advanced extensions**:
+- Add Z axis (3-axis CNC)
+- Arc interpolation (G2/G3 commands)
+- Homing sequences with limit switches
+- S-curve acceleration (smoother than trapezoidal)
+- Look-ahead buffer for continuous motion
+
+**References**:
+- [GRBL source code](https://github.com/grbl/grbl) - Reference implementation
+- [Bresenham's line algorithm](https://en.wikipedia.org/wiki/Bresenham%27s_line_algorithm)
+- [RepRap motion control](https://reprap.org/wiki/Step_rates)
+- [A4988 datasheet](https://www.allegromicro.com/en/products/motor-drivers/brush-dc-motor-drivers/a4988)
 
 ---
 
@@ -1263,7 +1597,7 @@ src/risc-v/
 | Memory (SPRAM) | Medium | Medium | ADC-Read | Medium |
 | FIFO | Medium | Low | Memory | Medium |
 | DMA Streaming | High | Medium | SPI Slave | Medium |
-| Servo Control | Low | High | PWM-Breathe | Low |
+| **Stepper Motion Control** | High | **Very High** | Timing, state machines | **HIGH** |
 | Audio Synthesis | Medium | High | DAC-Ramp | Low |
 | Clock Crossing | High | Low | Multiple clocks | Low |
 
@@ -1289,18 +1623,21 @@ src/risc-v/
 9. **Digital Filter Part 1: DDS Signal Source**
 10. **Digital Filter Part 2: FIR Filter**
 
-### Phase 5: Advanced
-11. **Memory (SPRAM)** - Unlock iCE40's potential
-12. **FIFO** - Essential building block
+### Phase 5: Motion Control
+11. **Stepper Motion Control** - GRBL-style 2-axis with acceleration
 
-### Phase 6: Capstone
-13. **RISC-V Part 1: Fetch & Decode** - Start the journey
-14. **RISC-V Part 2: ALU & Registers** - Core operations
-15. **RISC-V Part 3: Memory & Branches** - Complete CPU
-16. **RISC-V Part 4: Running C Code** - The payoff
+### Phase 6: Advanced
+12. **Memory (SPRAM)** - Unlock iCE40's potential
+13. **FIFO** - Essential building block
+
+### Phase 7: Capstone
+14. **RISC-V Part 1: Fetch & Decode** - Start the journey
+15. **RISC-V Part 2: ALU & Registers** - Core operations
+16. **RISC-V Part 3: Memory & Branches** - Complete CPU
+17. **RISC-V Part 4: Running C Code** - The payoff
 
 ### Wrap-up
-17. **Learning Plan Video** - Recap and roadmap
+18. **Learning Plan Video** - Recap and roadmap
 
 ---
 
