@@ -379,6 +379,17 @@ References:
 - Lost on power cycle, but instant switching
 - Good for development/testing
 
+**⚠️ iCEBreaker SRAM/CRAM Caveat**: On the iCEBreaker board, direct SRAM programming via `iceprog -S` does **NOT work out of the box**. The flash chip's CS and data lines are connected to both the FTDI and FPGA, causing bus contention.
+
+To enable SRAM-only programming, you must modify the hardware:
+1. Cut traces on solder jumpers J15 and J16 (disconnects flash from SPI data lines)
+2. Bridge pads 1-2 on J15 and J16 (routes SPI directly to FPGA)
+3. Reverse the process to restore flash programming
+
+From the schematic: *"For programming iCE cut traces connecting J15 and J16 pads. Short pads 1 and 2 together of J15 and J16 respectively."*
+
+For most users, just use standard flash programming (`iceprog file.bin`) - the speed difference is minimal for typical designs.
+
 **Option B: SPI Flash Programming (Persistent)**
 - ESP32 programs the external SPI flash
 - Bitstream persists across power cycles
