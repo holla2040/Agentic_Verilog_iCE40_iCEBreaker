@@ -328,6 +328,15 @@ void setup_spi_dma() {
 }
 ```
 
+**⚠️ DMA Caveat**: STM32duino does NOT natively support DMA through standard Arduino APIs. To use DMA, you must:
+1. **Use HAL directly** - Generate code with STM32CubeMX, port to Arduino sketch, and manually define DMA interrupt handlers (e.g., `extern "C" void DMA1_Channel1_IRQHandler(void) { HAL_DMA_IRQHandler(&hdma_adc1); }`)
+2. **Use third-party libraries** - e.g., [stm32f411-adc](https://github.com/pschatzmann/stm32f411-adc)
+3. **Use Roger's libmaple core** (older, separate from official STM32duino) which has `dmatransfer()` and `dmasend()` functions
+
+References:
+- [SPI DMA Issue #1285](https://github.com/stm32duino/Arduino_Core_STM32/issues/1285)
+- [ADC+DMA Forum Thread](https://www.stm32duino.com/viewtopic.php?p=15349)
+
 **New concepts**:
 - DMA basics (why it matters for throughput)
 - Double buffering
