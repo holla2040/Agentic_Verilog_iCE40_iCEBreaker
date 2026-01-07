@@ -1477,7 +1477,491 @@ GND       ---       GND
 
 ---
 
-### 12. Audio Synthesis
+### 12. DC Servo Motor Closed-Loop Control
+
+**Concept**: PID position/velocity control of DC motor with quadrature encoder feedback
+
+**Why this is valuable**:
+- Introduces closed-loop control (vs open-loop steppers)
+- Real-world industrial control technique
+- FPGA advantage: 100kHz+ control loop rate (vs 1-10kHz on MCU)
+- Foundation for robotics, CNC servos, motion control
+- Teaches PID tuning concepts
+
+**Natural progression**:
+```
+Stepper (open loop)  →  DC Servo (closed loop)
+"Assume it moved"        "Verify it moved, correct errors"
+```
+
+**System architecture**:
+```
+                    ┌─────────────────────────────────────────┐
+                    │                 FPGA                     │
+                    │                                          │
+Command ──────────► │  ┌─────────┐    ┌─────────┐             │
+(position/velocity) │  │   PID   │───►│   PWM   │─── PWM ────►├──► H-Bridge ──► DC Motor
+                    │  │ Control │    │   Gen   │             │                     │
+                    │  └────▲────┘    └────┬────┘             │                     │
+                    │       │              └────── DIR ───────┼──►                  │
+                    │  ┌────┴────┐                            │                     │
+                    │  │ Error   │                            │                     │
+                    │  │  Calc   │                            │     ┌──────────┐    │
+                    │  └────▲────┘                            │     │ Encoder  │◄───┘
+                    │       │                                  │     │  A / B   │
+                    │  ┌────┴────┐    ┌─────────┐             │     └────┬─────┘
+                    │  │Velocity │◄───│  Quad   │◄────────────┼──────────┘
+                    │  │  Calc   │    │ Decode  │   A, B      │
+                    │  └────┬────┘    └─────────┘             │
+                    │       │                                  │
+                    │  Position (32-bit count)                │
+                    └─────────────────────────────────────────┘
+```
+
+#### Module 1: Quadrature Decoder
+
+```verilog
+// Decodes A/B quadrature encoder signals to position count
+// 4x decoding: counts on every edge of A and B
+module quad_decoder (
+    input  wire        clk,
+    input  wire        rst,
+    input  wire        enc_a,
+    input  wire        enc_b,
+    output reg signed [31:0] position,
+    output reg         direction,      // 1 = forward, 0 = reverse
+    output reg         index_pulse     // Optional: Z channel
+);
+    // Synchronize inputs (2-FF for metastability)
+    reg [2:0] a_sync, b_sync;
+    always @(posedge clk) begin
+        a_sync <= {a_sync[1:0], enc_a};
+        b_sync <= {b_sync[1:0], enc_b};
+    end
+
+    wire a = a_sync[2];
+    wire b = b_sync[2];
+    wire a_prev = a_sync[1];
+    wire b_prev = b_sync[1];
+
+    // Detect edges
+    wire a_rise = (a && !a_prev);
+    wire a_fall = (!a && a_prev);
+    wire b_rise = (b && !b_prev);
+    wire b_fall = (!b && b_prev);
+
+    // State-based decoding (4x resolution)
+    // A leads B = forward, B leads A = reverse
+    always @(posedge clk) begin
+        if (rst) begin
+            position <= 0;
+        end else begin
+            case ({a_rise, a_fall, b_rise, b_fall})
+                4'b1000: begin  // A rising
+                    position <= position + (b ? -1 : 1);
+                    direction <= !b;
+                end
+                4'b0100: begin  // A falling
+                    position <= position + (b ? 1 : -1);
+                    direction <= b;
+                end
+                4'b0010: begin  // B rising
+                    position <= position + (a ? 1 : -1);
+                    direction <= a;
+                end
+                4'b0001: begin  // B falling
+                    position <= position + (a ? -1 : 1);
+                    direction <= !a;
+                end
+            endcase
+        end
+    end
+endmodule
+```
+
+#### Module 2: Velocity Calculator
+
+```verilog
+// Calculate velocity by differentiating position
+// Runs at fixed sample rate (e.g., 10kHz)
+module velocity_calc #(
+    parameter SAMPLE_DIV = 1200  // 12MHz / 1200 = 10kHz sample rate
+)(
+    input  wire        clk,
+    input  wire        rst,
+    input  wire signed [31:0] position,
+    output reg signed [31:0] velocity,    // Counts per sample period
+    output reg         sample_tick        // Pulse at sample rate
+);
+    reg [15:0] divider;
+    reg signed [31:0] position_prev;
+
+    always @(posedge clk) begin
+        sample_tick <= 1'b0;
+
+        if (rst) begin
+            divider <= 0;
+            velocity <= 0;
+        end else begin
+            divider <= divider + 1;
+
+            if (divider >= SAMPLE_DIV - 1) begin
+                divider <= 0;
+                sample_tick <= 1'b1;
+                velocity <= position - position_prev;
+                position_prev <= position;
+            end
+        end
+    end
+endmodule
+```
+
+#### Module 3: PID Controller
+
+```verilog
+// Fixed-point PID controller
+// All gains are 16-bit with 8 fractional bits (Q8.8 format)
+module pid_controller #(
+    parameter signed [15:0] KP = 16'sd256,   // 1.0 in Q8.8
+    parameter signed [15:0] KI = 16'sd25,    // 0.1 in Q8.8
+    parameter signed [15:0] KD = 16'sd128,   // 0.5 in Q8.8
+    parameter signed [31:0] I_MAX = 32'sd100000,  // Anti-windup limit
+    parameter signed [15:0] OUT_MAX = 16'sd32767  // Max output (PWM max)
+)(
+    input  wire        clk,
+    input  wire        rst,
+    input  wire        enable,
+    input  wire        sample_tick,         // Run PID at sample rate
+    input  wire signed [31:0] setpoint,     // Desired position
+    input  wire signed [31:0] feedback,     // Actual position
+    output reg signed [15:0] output_val     // PWM command (signed)
+);
+    reg signed [31:0] error, error_prev;
+    reg signed [31:0] integral;
+    reg signed [31:0] derivative;
+    reg signed [47:0] p_term, i_term, d_term;
+    reg signed [47:0] pid_sum;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            error <= 0;
+            error_prev <= 0;
+            integral <= 0;
+            output_val <= 0;
+        end else if (sample_tick && enable) begin
+            // Calculate error
+            error <= setpoint - feedback;
+
+            // Proportional term
+            p_term <= error * KP;
+
+            // Integral term with anti-windup
+            if (integral + error > I_MAX)
+                integral <= I_MAX;
+            else if (integral + error < -I_MAX)
+                integral <= -I_MAX;
+            else
+                integral <= integral + error;
+            i_term <= integral * KI;
+
+            // Derivative term
+            derivative <= error - error_prev;
+            d_term <= derivative * KD;
+            error_prev <= error;
+
+            // Sum and scale (shift right 8 for Q8.8)
+            pid_sum <= (p_term + i_term + d_term) >>> 8;
+
+            // Clamp output
+            if (pid_sum > OUT_MAX)
+                output_val <= OUT_MAX;
+            else if (pid_sum < -OUT_MAX)
+                output_val <= -OUT_MAX;
+            else
+                output_val <= pid_sum[15:0];
+        end
+    end
+endmodule
+```
+
+#### Module 4: H-Bridge Control with Brake Mode
+
+**H-Bridge operating modes:**
+```
+Mode      IN1   IN2   Result
+--------- ----- ----- ---------------------------
+Forward   PWM   LOW   Current flows A→B
+Reverse   LOW   PWM   Current flows B→A
+Coast     LOW   LOW   Motor spins freely (high-Z)
+Brake     LOW   LOW   Both low-sides ON (short windings)
+          (with enable held high on both sides)
+```
+
+**Why brake mode matters:**
+- **Coast**: Motor drifts, back-EMF fights PID, sloppy position hold
+- **Brake**: Windings shorted, regenerative braking, tight position hold
+- For servo control, brake during PWM-off gives much better response
+
+```verilog
+// H-Bridge control with brake/coast mode selection
+// Controls IN1/IN2 directly for full H-bridge control
+module pwm_hbridge #(
+    parameter CLOCK_FREQ = 12_000_000,
+    parameter PWM_FREQ = 20_000           // 20kHz PWM (inaudible)
+)(
+    input  wire        clk,
+    input  wire        rst,
+    input  wire signed [15:0] command,    // Signed: -32767 to +32767
+    input  wire        brake_enable,      // 1=brake when off, 0=coast when off
+    // H-bridge outputs (directly to driver IC)
+    output reg         in1,               // Controls one half-bridge
+    output reg         in2,               // Controls other half-bridge
+    output reg         enable             // Overall enable (some drivers need this)
+);
+    localparam PWM_MAX = CLOCK_FREQ / PWM_FREQ;  // 600 for 20kHz @ 12MHz
+
+    reg [15:0] pwm_counter;
+    wire [15:0] duty;
+    wire [15:0] magnitude;
+    wire pwm_on;
+    wire forward;
+
+    // Absolute value of command
+    assign magnitude = (command < 0) ? -command : command;
+    // Scale to PWM period
+    assign duty = (magnitude * PWM_MAX) >> 15;
+    // Direction
+    assign forward = (command >= 0);
+    // PWM state
+    assign pwm_on = (pwm_counter < duty);
+
+    always @(posedge clk) begin
+        if (rst) begin
+            pwm_counter <= 0;
+            in1 <= 0;
+            in2 <= 0;
+            enable <= 0;
+        end else begin
+            enable <= 1;
+
+            // PWM counter
+            pwm_counter <= pwm_counter + 1;
+            if (pwm_counter >= PWM_MAX - 1)
+                pwm_counter <= 0;
+
+            // H-bridge truth table
+            if (command == 0) begin
+                // Stopped: brake or coast
+                if (brake_enable) begin
+                    in1 <= 1'b0;  // Both low-sides ON = brake
+                    in2 <= 1'b0;  // (depends on driver, some use both HIGH)
+                end else begin
+                    in1 <= 1'b0;  // Both OFF = coast
+                    in2 <= 1'b0;
+                end
+            end else if (pwm_on) begin
+                // Driving
+                if (forward) begin
+                    in1 <= 1'b1;  // Forward: IN1=HIGH, IN2=LOW
+                    in2 <= 1'b0;
+                end else begin
+                    in1 <= 1'b0;  // Reverse: IN1=LOW, IN2=HIGH
+                    in2 <= 1'b1;
+                end
+            end else begin
+                // PWM off period: brake or coast
+                if (brake_enable) begin
+                    in1 <= 1'b0;  // Brake during PWM-off
+                    in2 <= 1'b0;
+                end else begin
+                    in1 <= 1'b0;  // Coast during PWM-off
+                    in2 <= 1'b0;
+                end
+            end
+        end
+    end
+endmodule
+```
+
+**Alternative: Locked-antiphase PWM (always braking)**
+```verilog
+// Locked-antiphase: 50% = stop, >50% = forward, <50% = reverse
+// Both sides always switching, continuous brake torque
+module pwm_locked_antiphase #(
+    parameter CLOCK_FREQ = 12_000_000,
+    parameter PWM_FREQ = 20_000
+)(
+    input  wire        clk,
+    input  wire        rst,
+    input  wire signed [15:0] command,    // -32767 to +32767
+    output reg         in1,
+    output reg         in2
+);
+    localparam PWM_MAX = CLOCK_FREQ / PWM_FREQ;
+
+    reg [15:0] pwm_counter;
+    wire [15:0] duty;
+
+    // Map signed command to 0-100% duty
+    // -32767 → 0%, 0 → 50%, +32767 → 100%
+    assign duty = ((command + 32768) * PWM_MAX) >> 16;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            pwm_counter <= 0;
+        end else begin
+            pwm_counter <= (pwm_counter >= PWM_MAX - 1) ? 0 : pwm_counter + 1;
+
+            // IN1 and IN2 are always opposite
+            in1 <= (pwm_counter < duty);
+            in2 <= (pwm_counter >= duty);
+        end
+    end
+endmodule
+// At 50% duty: IN1 and IN2 each HIGH 50% of time
+// Motor sees alternating +V/-V at PWM freq = net zero torque but active braking
+```
+
+**Comparison:**
+| Mode | Efficiency | Holding Torque | Smoothness |
+|------|------------|----------------|------------|
+| Sign-magnitude + coast | Best | Poor | Cogging at low speed |
+| Sign-magnitude + brake | Good | Good | Better |
+| Locked-antiphase | Lower | Excellent | Smoothest |
+
+#### Top-Level Integration
+
+```verilog
+module servo_controller (
+    input  wire        clk,           // 12 MHz
+    input  wire        rst,
+    // Command input
+    input  wire signed [31:0] target_position,
+    input  wire        enable,
+    // Encoder inputs
+    input  wire        enc_a,
+    input  wire        enc_b,
+    // Motor outputs
+    output wire        pwm,
+    output wire        dir,
+    output wire        motor_enable,
+    // Status
+    output wire signed [31:0] current_position,
+    output wire signed [31:0] current_velocity,
+    output wire signed [15:0] pid_output
+);
+    wire sample_tick;
+    wire signed [31:0] position;
+    wire signed [31:0] velocity;
+    wire signed [15:0] pid_out;
+
+    quad_decoder u_encoder (
+        .clk(clk), .rst(rst),
+        .enc_a(enc_a), .enc_b(enc_b),
+        .position(position)
+    );
+
+    velocity_calc u_velocity (
+        .clk(clk), .rst(rst),
+        .position(position),
+        .velocity(velocity),
+        .sample_tick(sample_tick)
+    );
+
+    pid_controller u_pid (
+        .clk(clk), .rst(rst),
+        .enable(enable),
+        .sample_tick(sample_tick),
+        .setpoint(target_position),
+        .feedback(position),
+        .output_val(pid_out)
+    );
+
+    pwm_with_dir u_pwm (
+        .clk(clk), .rst(rst),
+        .command(pid_out),
+        .pwm(pwm),
+        .dir(dir),
+        .enable(motor_enable)
+    );
+
+    assign current_position = position;
+    assign current_velocity = velocity;
+    assign pid_output = pid_out;
+endmodule
+```
+
+**Hardware needed**:
+- DC motor with quadrature encoder (geared motors with encoders: ~$15-30)
+- H-bridge driver (L298N, TB6612, BTS7960)
+- Separate motor power supply (6-24V depending on motor)
+- Jumper wires
+
+**Pin connections**:
+```
+iCEBreaker          H-Bridge        Encoder
+----------          --------        -------
+PMOD pin  ───PWM──►  IN1/PWM
+PMOD pin  ───DIR──►  IN2/DIR
+PMOD pin  ───EN───►  ENABLE
+PMOD pin  ◄──A─────────────────────  A
+PMOD pin  ◄──B─────────────────────  B
+GND       ──────────  GND            GND
+                      VM ◄── Motor power (6-24V)
+```
+
+**Suggested structure**:
+```
+src/dc-servo/
+├── top.v                # Main module with UART interface
+├── quad_decoder.v       # Encoder decoding
+├── velocity_calc.v      # Differentiate position
+├── pid_controller.v     # PID math
+├── pwm_with_dir.v       # PWM generation
+├── uart_rx.v            # Receive commands
+├── uart_tx.v            # Send position/status
+├── icebreaker.pcf
+├── README.md
+└── Makefile
+```
+
+**Demo progression**:
+1. Encoder test: display position count on UART as you rotate motor by hand
+2. PWM test: ramp motor speed up/down (open loop)
+3. Position hold: motor resists when you try to turn it
+4. Position move: command positions, watch motor seek
+5. Tune PID: adjust KP/KI/KD, observe oscillation/damping
+
+**Performance targets**:
+- Control loop rate: 10-100 kHz (adjustable)
+- Encoder rate: millions of counts/sec (limited by encoder, not FPGA)
+- PWM frequency: 20-50 kHz (inaudible)
+- Position resolution: 32-bit
+
+**Key concepts taught**:
+- Closed-loop control theory
+- PID tuning (Kp, Ki, Kd effects)
+- Fixed-point arithmetic (Q8.8 format)
+- Anti-windup for integral term
+- Quadrature encoding (4x decoding)
+- Metastability in encoder inputs
+
+**Advanced extensions**:
+- Velocity control mode (PID on velocity instead of position)
+- Cascaded control (velocity loop inside position loop)
+- Trajectory generator (trapezoidal velocity profile to target)
+- Dual motor control (2-axis robot arm)
+- Autotune: measure step response, calculate PID gains
+
+**References**:
+- [PID Controller on FPGA](https://www.fpga4fun.com/PID.html)
+- [Quadrature Encoder Interface](https://www.fpga4fun.com/QuadratureDecoder.html)
+- [PID Without a PhD](https://www.wescottdesign.com/articles/pid/pidWithoutAPhd.pdf) - Excellent PID tuning guide
+- [Fixed-point arithmetic](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
+
+---
+
+### 13. Audio Synthesis
 
 **Why**: Uses existing DAC, creates audible output, fun project
 
@@ -1598,6 +2082,7 @@ src/risc-v/
 | FIFO | Medium | Low | Memory | Medium |
 | DMA Streaming | High | Medium | SPI Slave | Medium |
 | **Stepper Motion Control** | High | **Very High** | Timing, state machines | **HIGH** |
+| **DC Servo Closed-Loop** | High | **Very High** | PID, encoder, PWM | **HIGH** |
 | Audio Synthesis | Medium | High | DAC-Ramp | Low |
 | Clock Crossing | High | Low | Multiple clocks | Low |
 
@@ -1624,20 +2109,21 @@ src/risc-v/
 10. **Digital Filter Part 2: FIR Filter**
 
 ### Phase 5: Motion Control
-11. **Stepper Motion Control** - GRBL-style 2-axis with acceleration
+11. **Stepper Motion Control** - GRBL-style 2-axis with acceleration (open loop)
+12. **DC Servo Closed-Loop** - PID control with encoder feedback
 
 ### Phase 6: Advanced
-12. **Memory (SPRAM)** - Unlock iCE40's potential
-13. **FIFO** - Essential building block
+13. **Memory (SPRAM)** - Unlock iCE40's potential
+14. **FIFO** - Essential building block
 
 ### Phase 7: Capstone
-14. **RISC-V Part 1: Fetch & Decode** - Start the journey
-15. **RISC-V Part 2: ALU & Registers** - Core operations
-16. **RISC-V Part 3: Memory & Branches** - Complete CPU
-17. **RISC-V Part 4: Running C Code** - The payoff
+15. **RISC-V Part 1: Fetch & Decode** - Start the journey
+16. **RISC-V Part 2: ALU & Registers** - Core operations
+17. **RISC-V Part 3: Memory & Branches** - Complete CPU
+18. **RISC-V Part 4: Running C Code** - The payoff
 
 ### Wrap-up
-18. **Learning Plan Video** - Recap and roadmap
+19. **Learning Plan Video** - Recap and roadmap
 
 ---
 
