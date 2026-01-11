@@ -32,6 +32,14 @@ When writing Verilog code:
 - Each module should explain what it does and how the hardware works
 - Reference the existing projects in src/ as templates
 
+## Prompt Review Protocol (CRITICAL)
+
+The user may lack deep Verilog knowledge. You must:
+1. **Analyze every prompt** for ambiguity or missing hardware constraints.
+2. **Do not guess** implementation details (polarity, timing, bit-width) without stating assumptions or asking.
+3. **Refine**: If a prompt is poor (e.g., "Make it work"), suggest a more specific prompt or ask the specific questions needed to proceed.
+4. **Educate**: Briefly explain *why* the missing detail matters (e.g., "I need to know the button polarity to ensure we don't count presses when the button is released").
+
 ## Verilog Style Guidelines
 
 - Use lowercase with underscores for signal names
