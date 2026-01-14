@@ -9,41 +9,22 @@ A roadmap for additional agentic Verilog tutorials, organized by priority and co
 
 ## Future Projects (A-Z)
 
-### A. I2C for ADS1115 Breakout Board (Soft Implementation)
+### A. I2C for ADS1115 Breakout Board (Soft Implementation) ✓ COMPLETED
 
-**Concept**: Implement I2C master in pure Verilog to read from the 16-bit ADS1115 ADC
+**Location**: `src/adc-read-i2c/`
 
-**Why it fits**:
-- Natural progression from SPI (DAC-Ramp, ADC-Read) to I2C
-- Builds on familiar concepts: state machines, shift registers, timing
-- I2C is more complex: bidirectional SDA, ACK/NACK, addressing
-- ADS1115 offers 16-bit resolution vs AD7476A's 12-bit
-- **Soft implementation teaches the protocol deeply** (no black-box primitives)
+Implemented I2C master in pure Verilog to read from the 16-bit ADS1115 ADC:
+- Complete I2C protocol: START, STOP, ACK/NACK, byte read/write
+- Open-drain emulation using SB_IO tristate primitives
+- Timeout detection for stuck bus conditions
+- UART output at 115200 baud (hex format, 5 readings/sec)
+- Comprehensive README with I2C protocol documentation
 
-**Why soft implementation (not hard IP)**:
-- Educational: understand every bit of the protocol
-- Portable: works on any FPGA, not just iCE40
-- Flexible: can modify timing, add features
-- Pins: not restricted to hard IP pin locations
-- Foundation: prepares viewers for the comparison video later
-
-**New concepts introduced**:
-- I2C protocol fundamentals:
-  - START condition (SDA falls while SCL high)
-  - STOP condition (SDA rises while SCL high)
-  - ACK/NACK (9th clock pulse acknowledgment)
-  - 7-bit addressing + R/W bit
+**Concepts demonstrated**:
+- I2C protocol fundamentals (START/STOP conditions, ACK/NACK, 7-bit addressing)
 - Bidirectional signals (`inout` ports)
 - Tristate buffers (SB_IO primitive for open-drain)
-- Open-drain with external pullups
 - Multi-byte transactions with register addressing
-- Clock stretching detection (slave holds SCL low)
-
-**Hardware needed**:
-- ADS1115 breakout board (Adafruit or generic, ~$3-10)
-- 4.7k pullup resistors (usually on breakout already)
-- Analog signal source (potentiometer, or just read Vdd/GND)
-- Jumper wires
 
 ---
 
@@ -299,7 +280,7 @@ A roadmap for additional agentic Verilog tutorials, organized by priority and co
 
 | Topic | Complexity | Visual Appeal | Builds On | Priority |
 |-------|------------|---------------|-----------|----------|
-| I2C ADS1115 (Soft) | Medium | Medium | SPI | **A** |
+| I2C ADS1115 (Soft) | Medium | Medium | SPI | **A** ✓ |
 | Button Debouncing | Low | Low | Blinky | **B** |
 | Testbenches | Low | Medium | All | High |
 | STM32 Integration | Medium | High | SPI/I2C | High |

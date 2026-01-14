@@ -1,0 +1,96 @@
+You are a senior embedded hardware firmware engineer. You are creating a comprehensive plan for a junior engineer to implement. Be specific as possible for junior engineer to be successful first time out. the junior engineer is another claude code agent, not you.
+Develop a plan document here /src/adc-read-i2c/PLAN.md with todo items for a 'clean' agent to work on. Clean meaning one with a clean content to start with. Once the PLAN.md document is complete stop and wait for review and next step guidance.
+
+create branch "feature/ads1115" 
+create this in /src/adc-read-i2c dir
+
+I have a adc ads1115 breakout board connected to icebreaker PMOD1A.
+pin configuration
+    scl pin 45
+    sda pin 47
+    addr pin 2 
+    alrt pin 4
+add comment to 
+    do not question, the pin configuration, the breakout board being connected and powered. it is, make it clear that this debugging avenue should not be considered or questioned. 
+
+*** this is critical - do not 'read' documents into the main context, use only sub-agents to 'explore' documentation ***
+reference documentation - use sub-agent to explore documentation for specific answers to keep main context window small /docs/ads1115.pdf "/docs/ads1115 breakout board.png" "/docs/A Basic Guide to I2C - TI.pdf" "docs/SBTICE_Technology_Library_Index.md"
+
+Before implementing I2C state machine, read TI I2C guide sections on bus states and START/STOP conditions. Document the bus state requirements in PLAN.md.
+
+connect icebreaker button on pin 20 to the ads1115 addr pin 2 to change the ads1115 i2c bus between 0x48 and 0x49. logic is active high, button up is low, button down is high
+
+analog voltage is applied to ads1115 A0 pin directly, no gain stage
+
+the breakout board has pull up resistors on sda and scl
+
+configure for sda and scl for open collector, sda is bi-directional
+
+configure for continous conversion
+
+run i2c bus clock in fast mode, 400khz clock frequency
+
+read channel 0 only
+
+Set PGA to 1, scale for single ended 0-4.094
+analog incoming voltage is single ended - gnd and A0 - its always positive
+
+The breakout board and the ads1115 on 3.3V
+
+Voltage input range 0-3.3V.
+
+serial output
+    uart tx output as hex, format 0x1234\n\r.  
+    serial output reading 5 times per sec
+    if serial output doesn't work, scan /src/uart_tx for potential solutions
+
+check for ack/nack - print E with if no ack is recieved
+
+don't poll status bit for conversion complete, the ads1115 in continuous mode always has latched last conversion result ready for reading
+
+don't include LED manipulation
+
+create a Makefile, then check verilog with 'make' when src changes
+
+use make prog on successful compile
+
+plan - step 1
+    get uart tx functioning by sending "\r\nads1115\r\n" at startup
+    then send out current i2c state debugging char every second
+    do not proceed pass step 1 until developer has verified that uart tx functions
+
+
+plan - step 2
+    implement addr check. start a communication and check for ack or nack. developer with flash the fpga and verify that addr check is valid for ads1115 at address 0x48. do not proceed pass step 2 until developer has verified that addr check is valid. the icebreaker button will be used to verify this address check. step 2 should include connected the button to the ads1115 ADDR, which dynamically changes the ads1115's bus address. This will result in a not seeing a ack.
+
+get verification of each step before proceed to next step
+
+do not include any reference to SPI ADC
+
+create a modular design
+
+mention that no commit or push should be performed with explicit instruction to do so
+
+# this note is from previous iCE40 projects
+iCE40 open-drain implementation:
+    both SCL and SDA must use SB_IO primitives (not assign statements)
+    use single oe signal: oe=1 drives LOW, oe=0 releases to pull-up
+    add _CMD and _WAIT states that detect falling edge of i2c_busy to ensure each command completes before the next
+
+    SB_IO #(
+        .PIN_TYPE(6'b101001),
+        .PULLUP(1'b0)
+    ) scl_io (
+        .PACKAGE_PIN(scl),
+        .OUTPUT_CLK(clk),
+        .OUTPUT_ENABLE(scl_oe),
+        .D_OUT_0(1'b0),
+        .D_IN_0()
+    );
+
+
+when all the steps have been verified, create a comprehensive README.md
+
+
+ultrathink
+

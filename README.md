@@ -83,7 +83,8 @@ Reference materials in `docs/`:
 │   ├── freq-counter/    # Frequency counter with selectable generator
 │   ├── dac-ramp/        # DAC triangle wave generator with PLL
 │   ├── adc-read/        # ADC reader with UART output
-│   └── dac-adc-loopback/ # DAC-ADC loopback with modular design
+│   ├── dac-adc-loopback/ # DAC-ADC loopback with modular design
+│   └── adc-read-i2c/    # I2C ADC reader with ADS1115
 ├── docs/                # Component datasheets and reference materials
 │   ├── ad7476a.pdf             # AD7476A 12-bit ADC datasheet
 │   ├── ads1115.pdf             # ADS1115 16-bit ADC datasheet
@@ -94,7 +95,9 @@ Reference materials in `docs/`:
 │   ├── icebreaker-v1_0b-legend.jpg     # Board pin legend
 │   ├── icebreaker-v1_0b-legend-jumpers.jpg  # Jumper configuration
 │   ├── pmodad1_sch.pdf         # PMOD AD1 schematic
-│   └── pmodda2_sch.pdf         # PMOD DA2 schematic
+│   ├── pmodda2_sch.pdf         # PMOD DA2 schematic
+│   ├── SBTICETechnologyLibrary201701.pdf  # iCE40 primitive reference
+│   └── SBTICE_Technology_Library_Index.md # Primitive index
 ├── LICENSE
 └── README.md
 ```
@@ -201,6 +204,17 @@ Generates a slow triangle wave on the DAC and reads it back via the ADC, demonst
 - Combined SPI write (DAC) and SPI read (ADC) in one project
 
 **Testing:** Connect PMOD DA2 to PMOD1A, PMOD AD1 to PMOD1B, wire DAC output to ADC input, `make prog`, then `screen /dev/ttyUSB1 115200`. Watch ADC readings track the 60-second triangle wave.
+
+### ADC-Read-I2C
+Reads analog values from an ADS1115 16-bit I2C ADC and displays them via UART. This project implements a complete I2C master in pure Verilog (soft implementation) without using the iCE40's hard I2C IP. Demonstrates:
+- I2C master with START/STOP conditions, ACK/NACK handling
+- Open-drain emulation using SB_IO tristate primitives
+- Bidirectional signals (`inout` ports)
+- Multi-byte transactions with register addressing
+- Timeout detection for stuck bus conditions
+- Binary to hex ASCII conversion for UART output
+
+**Testing:** Connect ADS1115 breakout to PMOD1A (SCL=pin 45, SDA=pin 47), `make prog`, then `screen /dev/ttyUSB1 115200`. Apply 0-3.3V signal to A0 input.
 
 ## Using Claude Code for Verilog Generation
 
