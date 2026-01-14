@@ -143,22 +143,12 @@ make clean
 
 ### Build Flow
 
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   Verilog   │    │    JSON     │    │     ASC     │    │     BIN     │
-│   Sources   │───►│   Netlist   │───►│  Bitstream  │───►│   Binary    │
-│  (.v files) │    │             │    │  (ASCII)    │    │             │
-└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
-      │                  │                  │                  │
-      │     yosys        │    nextpnr       │    icepack       │
-      │   synth_ice40    │    --up5k        │                  │
-      └──────────────────┴──────────────────┴──────────────────┘
-                                                               │
-                                                               ▼
-                                                          ┌─────────┐
-                                                          │ iceprog │
-                                                          │ (flash) │
-                                                          └─────────┘
+```mermaid
+flowchart LR
+    A[".v files<br/>Verilog Sources"] -->|yosys<br/>synth_ice40| B[".json<br/>Netlist"]
+    B -->|nextpnr<br/>--up5k| C[".asc<br/>Bitstream"]
+    C -->|icepack| D[".bin<br/>Binary"]
+    D -->|iceprog| E[("FPGA<br/>Flash")]
 ```
 
 ### Resource Utilization
@@ -262,36 +252,26 @@ This shows: startup, voltage sweep from 0V to 3.3V, a brief communication error,
 
 ### System Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                            top.v                                      │
-│  ┌────────────────┐    ┌────────────────┐    ┌────────────────┐     │
-│  │   i2c_master   │    │  Main State    │    │    uart_tx     │     │
-│  │                │◄──►│   Machine      │───►│                │     │
-│  │  - START/STOP  │    │                │    │  - 115200 baud │     │
-│  │  - Read/Write  │    │  - Sequencing  │    │  - 8N1 format  │     │
-│  │  - ACK/NACK    │    │  - Formatting  │    │                │     │
-│  │  - Timeout     │    │  - Timing      │    │                │     │
-│  └───────┬────────┘    └────────────────┘    └───────┬────────┘     │
-│          │                                           │               │
-│          ▼                                           ▼               │
-│     ┌─────────┐                                 ┌─────────┐         │
-│     │  SB_IO  │                                 │   TX    │         │
-│     │(tristate│                                 │  (9)    │         │
-│     └────┬────┘                                 └────┬────┘         │
-└──────────┼───────────────────────────────────────────┼───────────────┘
-           │                                           │
-           ▼                                           ▼
-      ┌─────────┐                                 ┌─────────┐
-      │SCL (45) │                                 │  FTDI   │
-      │SDA (47) │                                 │  Chip   │
-      └────┬────┘                                 └────┬────┘
-           │                                           │
-           ▼                                           ▼
-      ┌─────────┐                                 ┌─────────┐
-      │ ADS1115 │                                 │   USB   │
-      │   ADC   │                                 │ Serial  │
-      └─────────┘                                 └─────────┘
+```mermaid
+flowchart TB
+    subgraph TOP["top.v"]
+        direction LR
+        I2C["i2c_master<br/>─────────<br/>• START/STOP<br/>• Read/Write<br/>• ACK/NACK<br/>• Timeout"]
+        MAIN["Main State<br/>Machine<br/>─────────<br/>• Sequencing<br/>• Formatting<br/>• Timing"]
+        UART["uart_tx<br/>─────────<br/>• 115200 baud<br/>• 8N1 format"]
+
+        I2C <--> MAIN
+        MAIN --> UART
+    end
+
+    I2C --> SBIO["SB_IO<br/>(tristate)"]
+    UART --> TX["TX Pin 9"]
+
+    SBIO --> PINS["SCL (45)<br/>SDA (47)"]
+    TX --> FTDI["FTDI Chip"]
+
+    PINS --> ADC["ADS1115<br/>ADC"]
+    FTDI --> USB["USB Serial"]
 ```
 
 ### Operation Sequence
@@ -516,110 +496,106 @@ localparam CMD_STOP  = 3'b100;  // Generate STOP condition
 
 ### Main State Machine (top.v)
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         STARTUP                                      │
-│  ┌──────────────┐    ┌──────────────┐                               │
-│  │STARTUP_SEND  │───►│STARTUP_WAIT  │──┐                            │
-│  └──────────────┘    └──────────────┘  │ (11 chars sent)            │
-│                                         ▼                            │
-├─────────────────────────────────────────────────────────────────────┤
-│                    CONFIGURE ADC                                     │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐         │
-│  │CFG_START │──►│CFG_ADDR  │──►│CFG_PTR   │──►│CFG_HI    │──►       │
-│  └──────────┘   └──────────┘   └──────────┘   └──────────┘          │
-│       ┌──────────┐   ┌──────────┐                                   │
-│   ───►│CFG_LO    │──►│CFG_STOP  │──┐                                │
-│       └──────────┘   └──────────┘  │                                │
-│                                     ▼                                │
-├─────────────────────────────────────────────────────────────────────┤
-│                    SET POINTER                                       │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐         │
-│  │PTR_START │──►│PTR_ADDR  │──►│PTR_REG   │──►│PTR_STOP  │──┐      │
-│  └──────────┘   └──────────┘   └──────────┘   └──────────┘  │      │
-│                                                              ▼      │
-├─────────────────────────────────────────────────────────────────────┤
-│                    READ LOOP                                         │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐         │
-│  │RD_START  │──►│RD_ADDR   │──►│RD_MSB    │──►│RD_LSB    │──►      │
-│  └──────────┘   └──────────┘   └──────────┘   └──────────┘          │
-│       ┌──────────┐   ┌──────────┐   ┌──────────┐                    │
-│   ───►│RD_STOP   │──►│HEX_SEND  │──►│HEX_WAIT  │──┐                 │
-│       └──────────┘   └──────────┘   └──────────┘  │                 │
-│                                                    ▼                 │
-│                                              ┌──────────┐            │
-│                              ┌───────────────│  IDLE    │◄───┐      │
-│                              │ (200ms timer) └──────────┘    │      │
-│                              │                    │          │      │
-│                              ▼                    │(error)   │      │
-│                         ┌──────────┐              ▼          │      │
-│                         │PTR_START │        ┌──────────┐     │      │
-│                         └──────────┘        │ERR_SEND  │─────┘      │
-│                                             └──────────┘            │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> STARTUP_SEND
+
+    state "STARTUP" as startup {
+        STARTUP_SEND --> STARTUP_WAIT
+        STARTUP_WAIT --> CFG_START: 11 chars sent
+    }
+
+    state "CONFIGURE ADC" as config {
+        CFG_START --> CFG_ADDR
+        CFG_ADDR --> CFG_PTR
+        CFG_PTR --> CFG_HI
+        CFG_HI --> CFG_LO
+        CFG_LO --> CFG_STOP
+        CFG_STOP --> PTR_START
+    }
+
+    state "SET POINTER" as pointer {
+        PTR_START --> PTR_ADDR
+        PTR_ADDR --> PTR_REG
+        PTR_REG --> PTR_STOP
+        PTR_STOP --> RD_START
+    }
+
+    state "READ LOOP" as readloop {
+        RD_START --> RD_ADDR
+        RD_ADDR --> RD_MSB
+        RD_MSB --> RD_LSB
+        RD_LSB --> RD_STOP
+        RD_STOP --> HEX_SEND
+        HEX_SEND --> HEX_WAIT
+        HEX_WAIT --> IDLE
+    }
+
+    IDLE --> PTR_START: 200ms timer
+    IDLE --> ERR_SEND: error
+    ERR_SEND --> IDLE
 ```
 
 ### I2C State Machine (i2c_master.v)
 
-```
-                              ┌──────────┐
-                              │   IDLE   │◄────────────────────┐
-                              └────┬─────┘                     │
-                                   │ cmd_start                 │
-              ┌────────────────────┼────────────────────┐      │
-              │                    │                    │      │
-              ▼                    ▼                    ▼      │
-        ┌───────────┐        ┌───────────┐        ┌─────────┐ │
-        │  START_1  │        │ WRITE_BIT │        │READ_BIT │ │
-        │  (SDA↓)   │        │ (set SDA) │        │(release)│ │
-        └─────┬─────┘        └─────┬─────┘        └────┬────┘ │
-              │                    │                   │      │
-              ▼                    ▼                   ▼      │
-        ┌───────────┐        ┌───────────┐        ┌─────────┐ │
-        │  START_2  │        │WRITE_HIGH │        │READ_HIGH│ │
-        │  (SCL↓)   │        │ (SCL↑)    │        │(sample) │ │
-        └─────┬─────┘        └─────┬─────┘        └────┬────┘ │
-              │                    │                   │      │
-              │                    ▼                   ▼      │
-              │              ┌───────────┐        ┌─────────┐ │
-              │              │WRITE_LOW  │        │READ_LOW │ │
-              │              │ (SCL↓)    │        │(SCL↓)   │ │
-              │              └─────┬─────┘        └────┬────┘ │
-              │                    │                   │      │
-              │         (8 bits)   │        (8 bits)   │      │
-              │                    ▼                   ▼      │
-              │              ┌───────────┐        ┌─────────┐ │
-              │              │ACK_SETUP  │        │ACK_SETUP│ │
-              │              │(release)  │        │(set ACK)│ │
-              │              └─────┬─────┘        └────┬────┘ │
-              │                    │                   │      │
-              │                    ▼                   ▼      │
-              │              ┌───────────┐        ┌─────────┐ │
-              │              │ ACK_HIGH  │        │ACK_HIGH │ │
-              │              │ (sample)  │        │(SCL↑)   │ │
-              │              └─────┬─────┘        └────┬────┘ │
-              │                    │                   │      │
-              │                    ▼                   ▼      │
-              │              ┌───────────┐        ┌─────────┐ │
-              │              │ ACK_LOW   │───────►│ACK_LOW  │─┤
-              │              └───────────┘        └─────────┘ │
-              │                                               │
-              ▼                    ┌───────────┐              │
-        ┌───────────┐              │  STOP_1   │◄─────────────┤
-        │   done    │──────────────│  (SDA↓)   │              │
-        └───────────┘              └─────┬─────┘              │
-                                         │                    │
-                                         ▼                    │
-                                   ┌───────────┐              │
-                                   │  STOP_2   │              │
-                                   │  (SCL↑)   │              │
-                                   └─────┬─────┘              │
-                                         │                    │
-                                         ▼                    │
-                                   ┌───────────┐              │
-                                   │  STOP_3   │──────────────┘
-                                   │  (SDA↑)   │
-                                   └───────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+
+    IDLE --> START_1: cmd=START
+    IDLE --> WRITE_BIT: cmd=WRITE
+    IDLE --> READ_BIT: cmd=READ
+    IDLE --> STOP_1: cmd=STOP
+
+    state "START Command" as start_cmd {
+        START_1: SDA↓
+        START_2: SCL↓
+        START_1 --> START_2
+        START_2 --> IDLE
+    }
+
+    state "WRITE Command" as write_cmd {
+        WRITE_BIT: set SDA
+        WRITE_HIGH: SCL↑
+        WRITE_LOW: SCL↓
+        W_ACK_SETUP: release SDA
+        W_ACK_HIGH: sample ACK
+        W_ACK_LOW: SCL↓
+
+        WRITE_BIT --> WRITE_HIGH
+        WRITE_HIGH --> WRITE_LOW
+        WRITE_LOW --> WRITE_BIT: bits 0-6
+        WRITE_LOW --> W_ACK_SETUP: bit 7
+        W_ACK_SETUP --> W_ACK_HIGH
+        W_ACK_HIGH --> W_ACK_LOW
+        W_ACK_LOW --> IDLE
+    }
+
+    state "READ Command" as read_cmd {
+        READ_BIT: release SDA
+        READ_HIGH: sample SDA
+        READ_LOW: SCL↓
+        R_ACK_SETUP: set ACK/NACK
+        R_ACK_HIGH: SCL↑
+        R_ACK_LOW: SCL↓
+
+        READ_BIT --> READ_HIGH
+        READ_HIGH --> READ_LOW
+        READ_LOW --> READ_BIT: bits 0-6
+        READ_LOW --> R_ACK_SETUP: bit 7
+        R_ACK_SETUP --> R_ACK_HIGH
+        R_ACK_HIGH --> R_ACK_LOW
+        R_ACK_LOW --> IDLE
+    }
+
+    state "STOP Command" as stop_cmd {
+        STOP_1: SDA↓
+        STOP_2: SCL↑
+        STOP_3: SDA↑
+        STOP_1 --> STOP_2
+        STOP_2 --> STOP_3
+        STOP_3 --> IDLE
+    }
 ```
 
 ## Timing Analysis
