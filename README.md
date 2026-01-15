@@ -99,7 +99,8 @@ Reference materials in `docs/`:
 │   ├── SBTICETechnologyLibrary201701.pdf  # iCE40 primitive reference
 │   └── SBTICE_Technology_Library_Index.md # Primitive index
 ├── LICENSE
-└── README.md
+├── README.md
+└── TODO.md            # Future project roadmap
 ```
 
 ## Examples
