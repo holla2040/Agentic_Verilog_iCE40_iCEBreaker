@@ -28,43 +28,30 @@ Implemented I2C master in pure Verilog to read from the 16-bit ADS1115 ADC:
 
 ---
 
-### A.2 Shared Module Library (REFACTOR)
+### A.2 Shared Module Library
 
-**Why**: Code review identified 3 different versions of `uart_tx.v` across projects with inconsistent interfaces. Creating a shared library prevents duplication and establishes canonical, reusable IP blocks.
+**Why**: Establish canonical, reusable IP blocks for future projects. Existing projects are published and will not be modified.
 
-**Current problem**:
-| Location | Lines | Interface |
-|----------|-------|-----------|
-| `uart-tx/` | 328 | Standalone (not reusable) |
-| `dac-adc-loopback/` | 141 | `data_i`, `start_i`, `busy_o` + parameter |
-| `adc-read-i2c/` | 173 | `tx_data`, `tx_start`, `tx_ready` (no parameter) |
+**Note**: Existing projects (`uart-tx/`, `dac-adc-loopback/`, `adc-read-i2c/`) each have their own implementations and are fixed. The library is for new projects going forward.
 
 **Proposed structure**:
 ```
 src/
-├── lib/                          # Shared reusable modules
+├── lib/                          # Shared reusable modules for NEW projects
 │   ├── uart_tx.v                 # Canonical UART transmitter
-│   ├── uart_rx.v                 # UART receiver
-│   ├── i2c_master.v              # Generic I2C master
-│   ├── spi_master.v              # Generic SPI master
+│   ├── uart_rx.v                 # UART receiver (future)
+│   ├── i2c_master.v              # Generic I2C master (future)
+│   ├── spi_master.v              # Generic SPI master (future)
 │   └── debounce.v                # Button debouncer (after Project B)
-│
-├── dac-adc-loopback/
-│   ├── top.v
-│   ├── triangle_gen.v            # Project-specific
-│   └── Makefile                  # References ../lib/uart_tx.v
-└── adc-read-i2c/
-    ├── top.v
-    └── Makefile                  # References ../lib/uart_tx.v, ../lib/i2c_master.v
 ```
+
+**Future candidates**: `i2c_master.v` and `spi_master.v` are natural additions since I2C and SPI are the most common protocols for interfacing FPGAs with external devices (sensors, ADCs, DACs, EEPROMs, displays, etc.).
 
 **What to do**:
 1. Create `src/lib/` directory
-2. Define canonical interface conventions (consistent `_i`/`_o` suffixes, parameterized baud rates)
-3. Consolidate `uart_tx.v` into single parameterized version
-4. Extract `i2c_master.v` from `adc-read-i2c/` to library
-5. Update Makefiles to reference `../lib/` paths
-6. Document library usage in `src/lib/README.md`
+2. Create canonical `uart_tx.v` with consistent interface conventions
+3. Document library usage in `src/lib/README.md`
+4. Future projects reference `../lib/` in their Makefiles
 
 **Canonical uart_tx.v interface**:
 ```verilog
@@ -81,11 +68,11 @@ module uart_tx #(
 
 **New concepts**:
 - IP reuse and library management
-- Consistent module interfaces
+- Consistent module interfaces (`_i`/`_o` suffixes)
 - Parameterization for flexibility
 - Makefile include paths
 
-**Priority**: Should be done before new projects to establish patterns for future modules.
+**Priority**: Create before starting new projects.
 
 ---
 
@@ -342,7 +329,7 @@ module uart_tx #(
 | Topic | Complexity | Visual Appeal | Builds On | Priority |
 |-------|------------|---------------|-----------|----------|
 | I2C ADS1115 (Soft) | Medium | Medium | SPI | **A** ✓ |
-| Shared Module Library | Low | Low | All | **A.2** (Refactor) |
+| Shared Module Library | Low | Low | All | **A.2** |
 | Button Debouncing | Low | Low | Blinky | **B** |
 | Testbenches | Low | Medium | All | High |
 | STM32 Integration | Medium | High | SPI/I2C | High |
