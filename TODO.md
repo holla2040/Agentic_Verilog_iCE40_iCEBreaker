@@ -28,6 +28,67 @@ Implemented I2C master in pure Verilog to read from the 16-bit ADS1115 ADC:
 
 ---
 
+### A.2 Shared Module Library (REFACTOR)
+
+**Why**: Code review identified 3 different versions of `uart_tx.v` across projects with inconsistent interfaces. Creating a shared library prevents duplication and establishes canonical, reusable IP blocks.
+
+**Current problem**:
+| Location | Lines | Interface |
+|----------|-------|-----------|
+| `uart-tx/` | 328 | Standalone (not reusable) |
+| `dac-adc-loopback/` | 141 | `data_i`, `start_i`, `busy_o` + parameter |
+| `adc-read-i2c/` | 173 | `tx_data`, `tx_start`, `tx_ready` (no parameter) |
+
+**Proposed structure**:
+```
+src/
+├── lib/                          # Shared reusable modules
+│   ├── uart_tx.v                 # Canonical UART transmitter
+│   ├── uart_rx.v                 # UART receiver
+│   ├── i2c_master.v              # Generic I2C master
+│   ├── spi_master.v              # Generic SPI master
+│   └── debounce.v                # Button debouncer (after Project B)
+│
+├── dac-adc-loopback/
+│   ├── top.v
+│   ├── triangle_gen.v            # Project-specific
+│   └── Makefile                  # References ../lib/uart_tx.v
+└── adc-read-i2c/
+    ├── top.v
+    └── Makefile                  # References ../lib/uart_tx.v, ../lib/i2c_master.v
+```
+
+**What to do**:
+1. Create `src/lib/` directory
+2. Define canonical interface conventions (consistent `_i`/`_o` suffixes, parameterized baud rates)
+3. Consolidate `uart_tx.v` into single parameterized version
+4. Extract `i2c_master.v` from `adc-read-i2c/` to library
+5. Update Makefiles to reference `../lib/` paths
+6. Document library usage in `src/lib/README.md`
+
+**Canonical uart_tx.v interface**:
+```verilog
+module uart_tx #(
+    parameter CLOCKS_PER_BIT = 104   // Default: 115200 @ 12MHz
+) (
+    input  wire       clk_i,
+    input  wire [7:0] data_i,
+    input  wire       start_i,
+    output wire       ready_o,       // HIGH when idle
+    output reg        tx_o
+);
+```
+
+**New concepts**:
+- IP reuse and library management
+- Consistent module interfaces
+- Parameterization for flexibility
+- Makefile include paths
+
+**Priority**: Should be done before new projects to establish patterns for future modules.
+
+---
+
 ### B. Button Debouncing (HIGH PRIORITY)
 
 **Why**: Practical necessity, teaches important timing concepts
@@ -281,6 +342,7 @@ Implemented I2C master in pure Verilog to read from the 16-bit ADS1115 ADC:
 | Topic | Complexity | Visual Appeal | Builds On | Priority |
 |-------|------------|---------------|-----------|----------|
 | I2C ADS1115 (Soft) | Medium | Medium | SPI | **A** ✓ |
+| Shared Module Library | Low | Low | All | **A.2** (Refactor) |
 | Button Debouncing | Low | Low | Blinky | **B** |
 | Testbenches | Low | Medium | All | High |
 | STM32 Integration | Medium | High | SPI/I2C | High |
