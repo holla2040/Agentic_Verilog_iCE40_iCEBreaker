@@ -1,45 +1,35 @@
 # ============================================================================
-# ADS1115 I2C ADC Reader - Pin Constraints File
+# Pin Constraints for ADS1115 I2C ADC Reader
 # ============================================================================
 #
-# Target: iCEBreaker v1.0b/v1.1a (iCE40 UP5K, SG48 package)
+# iCEBreaker FPGA (iCE40 UP5K, SG48 package)
 #
-# Pin assignment reference: docs/icebreaker-v1_0b-legend.jpg
-# Official PCF: https://github.com/icebreaker-fpga/icebreaker-verilog-examples
+# Step 2: I2C + button pins added for address check
 #
 # ============================================================================
 
 # ----------------------------------------------------------------------------
-# System Clock
+# System Clock (12 MHz oscillator)
 # ----------------------------------------------------------------------------
-# 12 MHz oscillator on the iCEBreaker board
 set_io clk 35
 
 # ----------------------------------------------------------------------------
-# UART (directly connected to FTDI chip)
+# UART TX (directly on board header)
 # ----------------------------------------------------------------------------
-# TX goes to pin 9, which routes to FTDI's RX
-# This allows communication via USB serial (typically /dev/ttyUSB1)
-set_io tx 9
+set_io uart_tx 9
 
 # ----------------------------------------------------------------------------
-# I2C Bus (PMOD1A connector)
+# I2C Interface (PMOD1A)
 # ----------------------------------------------------------------------------
-# These pins connect to ADS1115 breakout board
-# SCL and SDA use open-drain configuration (SB_IO_OD primitive in Verilog)
+# SCL on pin 45, SDA on pin 47
 set_io scl 45
 set_io sda 47
 
 # ----------------------------------------------------------------------------
 # ADS1115 Address Control
 # ----------------------------------------------------------------------------
-# Button on iCEBreaker directly drives ADDR pin on ADS1115:
-#   Button released: ADDR=GND -> I2C address 0x48
-#   Button pressed:  ADDR=VDD -> I2C address 0x49
-set_io btn_n 20
-set_io addr_out 2
-
-# ----------------------------------------------------------------------------
-# ADS1115 Alert/Ready (optional) - Added in later steps
-# ----------------------------------------------------------------------------
-# set_io alrt 4
+# Button input directly connected to ADS1115 ADDR pin
+# Button released = GND = address 0x48
+# Button pressed = VDD = address 0x49
+set_io btn_addr 20
+set_io ads_addr 2

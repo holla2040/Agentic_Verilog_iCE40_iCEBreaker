@@ -1,122 +1,112 @@
 // ============================================================================
-// I2C Master - Low-Level I2C Operations for iCE40 UP5K
+// I2C Master Controller
 // ============================================================================
 //
-// This module implements basic I2C master operations using the iCE40's SB_IO
-// primitive configured for tristate operation to emulate open-drain signaling.
+// A simple I2C master for communicating with I2C slave devices.
+// Uses SB_IO primitives for proper open-drain signaling on iCE40.
 //
-// OPEN-DRAIN EMULATION:
-//   I2C requires open-drain outputs where:
-//   - To output LOW:  Enable output (drives pin to ground via DOUT=0)
-//   - To output HIGH: Disable output (external pull-up pulls pin high)
-//   This allows multiple devices to share the bus and enables clock stretching.
+// I2C BASICS:
+//   - Two wires: SCL (clock) and SDA (data)
+//   - Both are open-drain with external pull-ups
+//   - Master controls SCL, both master and slave can pull SDA low
+//   - Data changes when SCL is LOW, sampled when SCL is HIGH
 //
-//   We use SB_IO with PIN_TYPE=6'b1010_01 (tristate output + simple input)
-//   and always drive 0, using OUTPUT_ENABLE to control the line.
+// OPEN-DRAIN IMPLEMENTATION:
+//   - To drive LOW:  output_enable = 1, output = 0
+//   - To release (HIGH via pull-up): output_enable = 0
+//   - Never actively drive HIGH!
 //
 // COMMAND INTERFACE:
-//   cmd[2:0]    - Command to execute:
-//                   000 = IDLE (do nothing)
-//                   001 = START (generate start condition)
-//                   010 = WRITE (transmit byte, check ACK from slave)
-//                   011 = READ (receive byte, send ACK/NACK to slave)
-//                   100 = STOP (generate stop condition)
-//   cmd_start   - Pulse HIGH for one clock to begin command
-//   busy        - HIGH while command is executing
-//   ack_error   - HIGH if NACK received after WRITE
-//   timeout     - HIGH if command did not complete within timeout period
-//   tx_data     - Byte to transmit (for WRITE command)
-//   rx_data     - Byte received (from READ command)
-//   send_nack   - For READ: 1=send NACK after read, 0=send ACK
+//   - Load cmd_i and data_i, assert start_i for one clock
+//   - busy_o goes HIGH while command executes
+//   - When busy_o falls, check ack_o for write commands
 //
-// TIMEOUT DETECTION:
-//   If any command takes longer than ~1ms (12000 clocks), the timeout flag
-//   is set and the module returns to IDLE. This detects stuck bus conditions
-//   such as a slave holding SCL low indefinitely (clock stretching gone wrong).
+// COMMANDS:
+//   CMD_START (1): Generate START condition (SDA falls while SCL HIGH)
+//   CMD_STOP  (2): Generate STOP condition (SDA rises while SCL HIGH)
+//   CMD_WRITE (3): Write 8 bits, return ACK status in ack_o
+//   CMD_READ  (4): Read 8 bits into data_o, send ACK/NACK based on ack_i
 //
-// I2C TIMING (Fast Mode 400 kHz):
-//   Clock period: 2.5 µs = 30 system clocks at 12 MHz
-//   Half period:  1.25 µs = 15 system clocks
+// TIMING:
+//   - I2C standard mode: 100 kHz
+//   - At 12 MHz system clock: half-period = 60 clocks (120 clocks per bit)
 //
 // ============================================================================
 
 module i2c_master (
-    input  wire       clk,          // 12 MHz system clock
+    input  wire       clk,           // System clock (12 MHz)
 
-    // I2C bus pins
-    inout  wire       scl,          // I2C clock (package pin)
-    inout  wire       sda,          // I2C data (package pin)
+    // I2C bus (directly to package pins)
+    inout  wire       scl,           // I2C clock line
+    inout  wire       sda,           // I2C data line
 
     // Command interface
-    input  wire [2:0] cmd,          // Command to execute
-    input  wire       cmd_start,    // Pulse to begin command
-    output reg        busy,         // HIGH while executing
-    output reg        ack_error,    // HIGH if NACK received (WRITE)
-    output reg        timeout,      // HIGH if command timed out (bus stuck)
+    input  wire [2:0] cmd_i,         // Command to execute
+    input  wire [7:0] data_i,        // Data byte to write
+    input  wire       ack_i,         // ACK to send on read (0=ACK, 1=NACK)
+    input  wire       start_i,       // Start command execution
 
-    // Data interface
-    input  wire [7:0] tx_data,      // Byte to transmit (WRITE)
-    output reg  [7:0] rx_data,      // Byte received (READ)
-    input  wire       send_nack     // For READ: 1=NACK, 0=ACK
+    output reg  [7:0] data_o,        // Data byte read
+    output reg        ack_o,         // ACK received (0=ACK, 1=NACK)
+    output reg        busy_o         // High while executing command
 );
 
     // ========================================================================
     // COMMAND DEFINITIONS
     // ========================================================================
 
-    localparam CMD_IDLE  = 3'b000;
-    localparam CMD_START = 3'b001;
-    localparam CMD_WRITE = 3'b010;
-    localparam CMD_READ  = 3'b011;
-    localparam CMD_STOP  = 3'b100;
+    localparam CMD_NONE  = 3'd0;
+    localparam CMD_START = 3'd1;
+    localparam CMD_STOP  = 3'd2;
+    localparam CMD_WRITE = 3'd3;
+    localparam CMD_READ  = 3'd4;
 
     // ========================================================================
-    // I2C TIMING PARAMETERS
+    // TIMING PARAMETERS
     // ========================================================================
-    // 12 MHz / 400 kHz = 30 clocks per I2C bit
-    // We use slightly slower timing for reliability
-
-    localparam HALF_PERIOD = 15;    // Clocks for SCL low or high phase
-    localparam QUARTER_PERIOD = 7;  // For setup/hold times
-
-    // ========================================================================
-    // TIMEOUT PARAMETER
-    // ========================================================================
-    // If a command takes longer than TIMEOUT_CLOCKS, abort and set timeout flag.
-    // At 400kHz, a single byte (8 bits + ACK) takes ~22.5µs.
-    // 1ms timeout (12000 clocks) gives plenty of margin for clock stretching.
-
-    localparam TIMEOUT_CLOCKS = 14'd12000;  // ~1ms at 12 MHz
-
-    // ========================================================================
-    // OPEN-DRAIN I/O PRIMITIVES (using SB_IO in tristate mode)
-    // ========================================================================
-    // SB_IO configured for tristate output emulates open-drain:
-    // - OUTPUT_ENABLE=1, D_OUT_0=0: Pin driven LOW
-    // - OUTPUT_ENABLE=0: Pin floats, external pull-up brings it HIGH
     //
-    // PIN_TYPE = 6'b1010_01:
-    //   [1:0] = 01: Simple (non-registered) input
-    //   [5:2] = 1010: Tristate output, directly from D_OUT_0/OUTPUT_ENABLE
+    // I2C standard mode is 100 kHz.
+    // At 12 MHz system clock:
+    //   Full bit period = 12,000,000 / 100,000 = 120 clocks
+    //   Half period = 60 clocks
 
-    reg scl_oe;     // 1=drive LOW, 0=release to pull-up
-    reg sda_oe;     // 1=drive LOW, 0=release to pull-up
-    wire scl_in;    // Read actual SCL state
-    wire sda_in;    // Read actual SDA state
+    localparam HALF_PERIOD = 60;
+
+    // ========================================================================
+    // SB_IO PRIMITIVES FOR OPEN-DRAIN I/O
+    // ========================================================================
+    //
+    // The iCE40 SB_IO primitive allows us to control the output enable
+    // separately from the output value. For open-drain:
+    //   - D_OUT_0 is always 0 (we only ever drive LOW)
+    //   - OUTPUT_ENABLE controls whether we drive or release
+    //
+    // PIN_TYPE = 6'b101001:
+    //   - Output: DDR (registered on OUTPUT_CLK)
+    //   - Input: Direct (no register)
+
+    reg scl_oe = 1'b0;   // SCL output enable (1 = drive LOW, 0 = release)
+    reg sda_oe = 1'b0;   // SDA output enable (1 = drive LOW, 0 = release)
+    wire scl_in;         // SCL input (directly sampled)
+    wire sda_in;         // SDA input (directly sampled)
 
     SB_IO #(
-        .PIN_TYPE(6'b1010_01)  // Tristate output + simple input
+        .PIN_TYPE(6'b101001),
+        .PULLUP(1'b0)
     ) scl_io (
         .PACKAGE_PIN(scl),
+        .OUTPUT_CLK(clk),
         .OUTPUT_ENABLE(scl_oe),
-        .D_OUT_0(1'b0),        // Always drive 0 when enabled
+        .D_OUT_0(1'b0),
         .D_IN_0(scl_in)
     );
 
     SB_IO #(
-        .PIN_TYPE(6'b1010_01)
+        .PIN_TYPE(6'b101001),
+        .PULLUP(1'b0)
     ) sda_io (
         .PACKAGE_PIN(sda),
+        .OUTPUT_CLK(clk),
         .OUTPUT_ENABLE(sda_oe),
         .D_OUT_0(1'b0),
         .D_IN_0(sda_in)
@@ -126,418 +116,274 @@ module i2c_master (
     // STATE MACHINE
     // ========================================================================
 
-    localparam STATE_IDLE           = 5'd0;
-    localparam STATE_START_1        = 5'd1;   // SDA goes LOW while SCL HIGH
-    localparam STATE_START_2        = 5'd2;   // SCL goes LOW
-    localparam STATE_WRITE_BIT      = 5'd3;   // Set SDA, then raise SCL
-    localparam STATE_WRITE_HIGH     = 5'd4;   // SCL HIGH period
-    localparam STATE_WRITE_LOW      = 5'd5;   // SCL LOW, prepare next bit
-    localparam STATE_ACK_SETUP      = 5'd6;   // Release SDA for ACK
-    localparam STATE_ACK_HIGH       = 5'd7;   // SCL HIGH, sample ACK
-    localparam STATE_ACK_LOW        = 5'd8;   // SCL LOW after ACK
-    localparam STATE_STOP_1         = 5'd9;   // SDA LOW, SCL LOW
-    localparam STATE_STOP_2         = 5'd10;  // SCL goes HIGH
-    localparam STATE_STOP_3         = 5'd11;  // SDA goes HIGH (stop condition)
-    // READ states
-    localparam STATE_READ_BIT       = 5'd12;  // Release SDA, prepare to read
-    localparam STATE_READ_HIGH      = 5'd13;  // SCL HIGH, sample SDA
-    localparam STATE_READ_LOW       = 5'd14;  // SCL LOW, shift in bit
-    localparam STATE_SEND_ACK_SETUP = 5'd15;  // Set SDA for ACK/NACK
-    localparam STATE_SEND_ACK_HIGH  = 5'd16;  // SCL HIGH for ACK/NACK
-    localparam STATE_SEND_ACK_LOW   = 5'd17;  // SCL LOW, complete
+    localparam S_IDLE       = 4'd0;
+    localparam S_START_1    = 4'd1;   // SDA goes LOW while SCL HIGH
+    localparam S_START_2    = 4'd2;   // SCL goes LOW
+    localparam S_STOP_1     = 4'd3;   // SDA goes LOW while SCL LOW
+    localparam S_STOP_2     = 4'd4;   // SCL goes HIGH
+    localparam S_STOP_3     = 4'd5;   // SDA goes HIGH while SCL HIGH
+    localparam S_WRITE_BIT  = 4'd6;   // Set SDA, then pulse SCL
+    localparam S_WRITE_SCL_H= 4'd7;   // SCL HIGH period
+    localparam S_WRITE_ACK  = 4'd8;   // Release SDA, clock in ACK
+    localparam S_WRITE_ACK_H= 4'd9;   // SCL HIGH, sample ACK
+    localparam S_READ_BIT   = 4'd10;  // Release SDA, clock in data
+    localparam S_READ_SCL_H = 4'd11;  // SCL HIGH, sample data
+    localparam S_READ_ACK   = 4'd12;  // Send ACK/NACK
+    localparam S_READ_ACK_H = 4'd13;  // SCL HIGH for ACK
 
-    reg [4:0] state;
-
-    // ========================================================================
-    // INTERNAL REGISTERS
-    // ========================================================================
-
-    reg [4:0] clk_count;    // Clock divider counter (0-31)
-    reg [2:0] bit_count;    // Bit counter for byte transmission (0-7)
-    reg [7:0] shift_reg;    // Shift register for data
-    reg [2:0] cmd_latch;    // Latched command
-    reg       nack_latch;   // Latched send_nack value
-    reg [13:0] timeout_cnt; // Timeout counter (counts clocks since command started)
-
-    // ========================================================================
-    // INITIALIZATION
-    // ========================================================================
-    // At power-up, release both lines so bus starts in idle state (both HIGH)
-
-    initial begin
-        scl_oe = 1'b0;      // Released (HIGH via pull-up)
-        sda_oe = 1'b0;      // Released (HIGH via pull-up)
-        state = STATE_IDLE;
-        busy = 1'b0;
-        ack_error = 1'b0;
-        timeout = 1'b0;
-        rx_data = 8'b0;
-        clk_count = 0;
-        bit_count = 0;
-        shift_reg = 0;
-        cmd_latch = 0;
-        nack_latch = 0;
-        timeout_cnt = 0;
-    end
+    reg [3:0] state = S_IDLE;
+    reg [6:0] timer = 7'd0;
+    reg [7:0] shift_reg = 8'd0;
+    reg [2:0] bit_count = 3'd0;
+    reg       send_ack = 1'b0;        // ACK to send on read
 
     // ========================================================================
     // MAIN STATE MACHINE
     // ========================================================================
 
     always @(posedge clk) begin
-        // --------------------------------------------------------------------
-        // TIMEOUT DETECTION
-        // --------------------------------------------------------------------
-        // If not idle, increment timeout counter. If it overflows, abort.
-        // This catches stuck bus conditions (e.g., slave holding SCL low).
-        if (state != STATE_IDLE) begin
-            if (timeout_cnt == TIMEOUT_CLOCKS - 1) begin
-                // Timeout! Release bus and return to IDLE
-                timeout <= 1'b1;
-                scl_oe <= 1'b0;
-                sda_oe <= 1'b0;
-                busy <= 1'b0;
-                state <= STATE_IDLE;
-                timeout_cnt <= 0;
-            end else begin
-                timeout_cnt <= timeout_cnt + 1;
-            end
-        end
-
         case (state)
             // ----------------------------------------------------------------
             // IDLE: Wait for command
             // ----------------------------------------------------------------
-            // IMPORTANT: Do NOT release lines here unconditionally!
-            // After START, SCL must stay LOW. After WRITE/READ, SCL must stay LOW.
-            // Lines are only released after STOP or at power-up (via initial).
-            STATE_IDLE: begin
-                busy <= 1'b0;
-                clk_count <= 0;
-                timeout_cnt <= 0;  // Reset timeout counter when idle
+            S_IDLE: begin
+                busy_o <= 1'b0;
+                timer <= 7'd0;
 
-                // Note: scl_oe and sda_oe maintain their current state
-                // They are only changed when starting a new command
+                if (start_i) begin
+                    busy_o <= 1'b1;
 
-                if (cmd_start) begin
-                    cmd_latch <= cmd;
-                    busy <= 1'b1;
-                    timeout <= 1'b0;  // Clear timeout flag on new command
-
-                    case (cmd)
+                    case (cmd_i)
                         CMD_START: begin
-                            // For START, first release both lines to ensure bus is idle
-                            // (This is a repeated START if we're mid-transaction)
-                            scl_oe <= 1'b0;
-                            sda_oe <= 1'b0;
-                            state <= STATE_START_1;
-                        end
-
-                        CMD_WRITE: begin
-                            // SCL should already be LOW from previous START or WRITE
-                            shift_reg <= tx_data;
-                            bit_count <= 0;
-                            state <= STATE_WRITE_BIT;
-                        end
-
-                        CMD_READ: begin
-                            // SCL should already be LOW
-                            // Release SDA so slave can drive it
-                            sda_oe <= 1'b0;
-                            shift_reg <= 8'b0;
-                            bit_count <= 0;
-                            nack_latch <= send_nack;
-                            state <= STATE_READ_BIT;
+                            // START: SDA must be HIGH, SCL must be HIGH
+                            // Then SDA goes LOW while SCL stays HIGH
+                            sda_oe <= 1'b0;  // Release SDA (goes HIGH)
+                            scl_oe <= 1'b0;  // Release SCL (goes HIGH)
+                            state <= S_START_1;
                         end
 
                         CMD_STOP: begin
-                            // Ensure SDA is LOW before STOP sequence
-                            sda_oe <= 1'b1;
-                            scl_oe <= 1'b1;
-                            state <= STATE_STOP_1;
+                            // STOP: SDA LOW, SCL LOW -> SCL HIGH -> SDA HIGH
+                            sda_oe <= 1'b1;  // Drive SDA LOW
+                            scl_oe <= 1'b1;  // Drive SCL LOW
+                            state <= S_STOP_1;
+                        end
+
+                        CMD_WRITE: begin
+                            shift_reg <= data_i;
+                            bit_count <= 3'd0;
+                            state <= S_WRITE_BIT;
+                        end
+
+                        CMD_READ: begin
+                            send_ack <= ack_i;
+                            shift_reg <= 8'd0;
+                            bit_count <= 3'd0;
+                            sda_oe <= 1'b0;  // Release SDA for slave to drive
+                            state <= S_READ_BIT;
                         end
 
                         default: begin
-                            busy <= 1'b0;
+                            busy_o <= 1'b0;
                         end
                     endcase
                 end
             end
 
-            // ================================================================
-            // START CONDITION: SDA HIGH->LOW while SCL is HIGH
-            // ================================================================
+            // ----------------------------------------------------------------
+            // START CONDITION
+            // ----------------------------------------------------------------
+            // START = SDA falls while SCL is HIGH
 
-            // STATE_START_1: SDA goes LOW while SCL stays HIGH
-            STATE_START_1: begin
-                scl_oe <= 1'b0;  // SCL HIGH (released)
-
-                if (clk_count < QUARTER_PERIOD) begin
-                    // Setup time - ensure SCL is HIGH
-                    clk_count <= clk_count + 1;
+            S_START_1: begin
+                // Wait for lines to stabilize HIGH, then pull SDA LOW
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    sda_oe <= 1'b1;  // Pull SDA LOW (START condition)
+                    state <= S_START_2;
                 end else begin
-                    // Pull SDA LOW - this is the START condition
-                    sda_oe <= 1'b1;
-                    clk_count <= 0;
-                    state <= STATE_START_2;
+                    timer <= timer + 1'b1;
                 end
             end
 
-            // STATE_START_2: Hold SDA LOW, then pull SCL LOW
-            STATE_START_2: begin
-                sda_oe <= 1'b1;  // Keep SDA LOW
-
-                if (clk_count < HALF_PERIOD) begin
-                    clk_count <= clk_count + 1;
+            S_START_2: begin
+                // Hold SDA LOW, then pull SCL LOW
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    scl_oe <= 1'b1;  // Pull SCL LOW
+                    state <= S_IDLE;
                 end else begin
-                    // Pull SCL LOW to complete START
-                    scl_oe <= 1'b1;
-                    clk_count <= 0;
-                    state <= STATE_IDLE;
-                end
-            end
-
-            // ================================================================
-            // WRITE BYTE: Send 8 bits MSB first, then read ACK from slave
-            // ================================================================
-
-            // STATE_WRITE_BIT: Set SDA to bit value, SCL stays LOW
-            STATE_WRITE_BIT: begin
-                scl_oe <= 1'b1;  // SCL LOW
-
-                // Set SDA to MSB of shift register
-                // sda_oe=1 drives LOW, sda_oe=0 releases HIGH
-                sda_oe <= ~shift_reg[7];
-
-                if (clk_count < QUARTER_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    clk_count <= 0;
-                    state <= STATE_WRITE_HIGH;
-                end
-            end
-
-            // STATE_WRITE_HIGH: SCL goes HIGH, hold data
-            STATE_WRITE_HIGH: begin
-                scl_oe <= 1'b0;  // Release SCL (goes HIGH)
-
-                if (clk_count < HALF_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    clk_count <= 0;
-                    state <= STATE_WRITE_LOW;
-                end
-            end
-
-            // STATE_WRITE_LOW: SCL goes LOW, prepare next bit
-            STATE_WRITE_LOW: begin
-                scl_oe <= 1'b1;  // Pull SCL LOW
-
-                if (clk_count < QUARTER_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    clk_count <= 0;
-
-                    if (bit_count == 7) begin
-                        // All 8 bits sent, now read ACK
-                        state <= STATE_ACK_SETUP;
-                    end else begin
-                        // More bits to send
-                        bit_count <= bit_count + 1;
-                        shift_reg <= shift_reg << 1;
-                        state <= STATE_WRITE_BIT;
-                    end
-                end
-            end
-
-            // STATE_ACK_SETUP: Release SDA so slave can respond
-            STATE_ACK_SETUP: begin
-                scl_oe <= 1'b1;  // SCL LOW
-                sda_oe <= 1'b0;  // Release SDA (slave will pull LOW for ACK)
-
-                if (clk_count < QUARTER_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    clk_count <= 0;
-                    state <= STATE_ACK_HIGH;
-                end
-            end
-
-            // STATE_ACK_HIGH: SCL HIGH, sample SDA for ACK/NACK
-            STATE_ACK_HIGH: begin
-                scl_oe <= 1'b0;  // Release SCL (goes HIGH)
-
-                if (clk_count < HALF_PERIOD) begin
-                    clk_count <= clk_count + 1;
-
-                    // Sample ACK near middle of HIGH period
-                    if (clk_count == QUARTER_PERIOD) begin
-                        // SDA LOW = ACK, SDA HIGH = NACK
-                        ack_error <= sda_in;  // sda_in=1 means NACK (error)
-                    end
-                end else begin
-                    clk_count <= 0;
-                    state <= STATE_ACK_LOW;
-                end
-            end
-
-            // STATE_ACK_LOW: SCL goes LOW, byte complete
-            STATE_ACK_LOW: begin
-                scl_oe <= 1'b1;  // Pull SCL LOW
-
-                if (clk_count < QUARTER_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    state <= STATE_IDLE;
-                end
-            end
-
-            // ================================================================
-            // READ BYTE: Receive 8 bits MSB first, then send ACK/NACK to slave
-            // ================================================================
-
-            // STATE_READ_BIT: SCL LOW, SDA released, prepare to sample
-            STATE_READ_BIT: begin
-                scl_oe <= 1'b1;  // SCL LOW
-                sda_oe <= 1'b0;  // Release SDA (slave drives it)
-
-                if (clk_count < QUARTER_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    clk_count <= 0;
-                    state <= STATE_READ_HIGH;
-                end
-            end
-
-            // STATE_READ_HIGH: SCL goes HIGH, sample SDA
-            STATE_READ_HIGH: begin
-                scl_oe <= 1'b0;  // Release SCL (goes HIGH)
-
-                if (clk_count < HALF_PERIOD) begin
-                    clk_count <= clk_count + 1;
-
-                    // Sample data near middle of HIGH period
-                    if (clk_count == QUARTER_PERIOD) begin
-                        // Shift in the bit (MSB first)
-                        shift_reg <= {shift_reg[6:0], sda_in};
-                    end
-                end else begin
-                    clk_count <= 0;
-                    state <= STATE_READ_LOW;
-                end
-            end
-
-            // STATE_READ_LOW: SCL goes LOW, check if more bits
-            STATE_READ_LOW: begin
-                scl_oe <= 1'b1;  // Pull SCL LOW
-
-                if (clk_count < QUARTER_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    clk_count <= 0;
-
-                    if (bit_count == 7) begin
-                        // All 8 bits received, copy to rx_data
-                        rx_data <= shift_reg;
-                        // Now send ACK or NACK
-                        state <= STATE_SEND_ACK_SETUP;
-                    end else begin
-                        // More bits to read
-                        bit_count <= bit_count + 1;
-                        state <= STATE_READ_BIT;
-                    end
-                end
-            end
-
-            // STATE_SEND_ACK_SETUP: Set SDA for ACK (LOW) or NACK (HIGH)
-            STATE_SEND_ACK_SETUP: begin
-                scl_oe <= 1'b1;  // SCL LOW
-
-                // For ACK: pull SDA LOW (sda_oe=1)
-                // For NACK: release SDA HIGH (sda_oe=0)
-                sda_oe <= ~nack_latch;
-
-                if (clk_count < QUARTER_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    clk_count <= 0;
-                    state <= STATE_SEND_ACK_HIGH;
-                end
-            end
-
-            // STATE_SEND_ACK_HIGH: SCL HIGH, hold ACK/NACK
-            STATE_SEND_ACK_HIGH: begin
-                scl_oe <= 1'b0;  // Release SCL (goes HIGH)
-
-                if (clk_count < HALF_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    clk_count <= 0;
-                    state <= STATE_SEND_ACK_LOW;
-                end
-            end
-
-            // STATE_SEND_ACK_LOW: SCL goes LOW, read complete
-            STATE_SEND_ACK_LOW: begin
-                scl_oe <= 1'b1;  // Pull SCL LOW
-
-                if (clk_count < QUARTER_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    state <= STATE_IDLE;
-                end
-            end
-
-            // ================================================================
-            // STOP CONDITION: SDA LOW->HIGH while SCL is HIGH
-            // ================================================================
-
-            // STATE_STOP_1: Ensure SDA LOW, SCL LOW
-            STATE_STOP_1: begin
-                sda_oe <= 1'b1;  // SDA LOW
-                scl_oe <= 1'b1;  // SCL LOW
-
-                if (clk_count < QUARTER_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    clk_count <= 0;
-                    state <= STATE_STOP_2;
-                end
-            end
-
-            // STATE_STOP_2: Release SCL (goes HIGH), keep SDA LOW
-            STATE_STOP_2: begin
-                sda_oe <= 1'b1;  // Keep SDA LOW
-                scl_oe <= 1'b0;  // Release SCL (goes HIGH)
-
-                if (clk_count < HALF_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    clk_count <= 0;
-                    state <= STATE_STOP_3;
-                end
-            end
-
-            // STATE_STOP_3: Release SDA (goes HIGH) - STOP condition
-            STATE_STOP_3: begin
-                scl_oe <= 1'b0;  // Keep SCL HIGH
-                sda_oe <= 1'b0;  // Release SDA (goes HIGH) - STOP!
-
-                if (clk_count < HALF_PERIOD) begin
-                    clk_count <= clk_count + 1;
-                end else begin
-                    state <= STATE_IDLE;
+                    timer <= timer + 1'b1;
                 end
             end
 
             // ----------------------------------------------------------------
-            // DEFAULT: Return to idle
+            // STOP CONDITION
             // ----------------------------------------------------------------
+            // STOP = SDA rises while SCL is HIGH
+
+            S_STOP_1: begin
+                // SDA LOW, SCL LOW - wait, then release SCL
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    scl_oe <= 1'b0;  // Release SCL (goes HIGH)
+                    state <= S_STOP_2;
+                end else begin
+                    timer <= timer + 1'b1;
+                end
+            end
+
+            S_STOP_2: begin
+                // SCL HIGH, SDA still LOW - wait, then release SDA
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    sda_oe <= 1'b0;  // Release SDA (goes HIGH = STOP)
+                    state <= S_STOP_3;
+                end else begin
+                    timer <= timer + 1'b1;
+                end
+            end
+
+            S_STOP_3: begin
+                // Hold for a moment, then done
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    state <= S_IDLE;
+                end else begin
+                    timer <= timer + 1'b1;
+                end
+            end
+
+            // ----------------------------------------------------------------
+            // WRITE BYTE (MSB first)
+            // ----------------------------------------------------------------
+
+            S_WRITE_BIT: begin
+                // Set SDA based on MSB, SCL is LOW
+                scl_oe <= 1'b1;                    // Keep SCL LOW
+                sda_oe <= ~shift_reg[7];          // Drive LOW if bit=0, release if bit=1
+
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    scl_oe <= 1'b0;                // Release SCL (goes HIGH)
+                    state <= S_WRITE_SCL_H;
+                end else begin
+                    timer <= timer + 1'b1;
+                end
+            end
+
+            S_WRITE_SCL_H: begin
+                // SCL HIGH - slave samples SDA
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    scl_oe <= 1'b1;                // Pull SCL LOW
+                    shift_reg <= {shift_reg[6:0], 1'b0};
+
+                    if (bit_count == 3'd7) begin
+                        // All 8 bits sent, get ACK
+                        state <= S_WRITE_ACK;
+                    end else begin
+                        bit_count <= bit_count + 1'b1;
+                        state <= S_WRITE_BIT;
+                    end
+                end else begin
+                    timer <= timer + 1'b1;
+                end
+            end
+
+            S_WRITE_ACK: begin
+                // Release SDA for slave to send ACK
+                sda_oe <= 1'b0;                    // Release SDA
+                scl_oe <= 1'b1;                    // Keep SCL LOW
+
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    scl_oe <= 1'b0;                // Release SCL (goes HIGH)
+                    state <= S_WRITE_ACK_H;
+                end else begin
+                    timer <= timer + 1'b1;
+                end
+            end
+
+            S_WRITE_ACK_H: begin
+                // SCL HIGH - sample ACK from slave
+                // ACK = SDA LOW, NACK = SDA HIGH
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    ack_o <= sda_in;               // 0 = ACK, 1 = NACK
+                    scl_oe <= 1'b1;                // Pull SCL LOW
+                    state <= S_IDLE;
+                end else begin
+                    timer <= timer + 1'b1;
+                end
+            end
+
+            // ----------------------------------------------------------------
+            // READ BYTE (MSB first)
+            // ----------------------------------------------------------------
+
+            S_READ_BIT: begin
+                // SDA released, SCL LOW - wait, then raise SCL
+                scl_oe <= 1'b1;                    // Keep SCL LOW
+                sda_oe <= 1'b0;                    // Keep SDA released
+
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    scl_oe <= 1'b0;                // Release SCL (goes HIGH)
+                    state <= S_READ_SCL_H;
+                end else begin
+                    timer <= timer + 1'b1;
+                end
+            end
+
+            S_READ_SCL_H: begin
+                // SCL HIGH - sample SDA
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    shift_reg <= {shift_reg[6:0], sda_in};
+                    scl_oe <= 1'b1;                // Pull SCL LOW
+
+                    if (bit_count == 3'd7) begin
+                        // All 8 bits received, send ACK/NACK
+                        data_o <= {shift_reg[6:0], sda_in};
+                        state <= S_READ_ACK;
+                    end else begin
+                        bit_count <= bit_count + 1'b1;
+                        state <= S_READ_BIT;
+                    end
+                end else begin
+                    timer <= timer + 1'b1;
+                end
+            end
+
+            S_READ_ACK: begin
+                // Send ACK (SDA LOW) or NACK (SDA HIGH)
+                scl_oe <= 1'b1;                    // Keep SCL LOW
+                sda_oe <= ~send_ack;              // ACK=0 drives LOW, NACK=1 releases
+
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    scl_oe <= 1'b0;                // Release SCL (goes HIGH)
+                    state <= S_READ_ACK_H;
+                end else begin
+                    timer <= timer + 1'b1;
+                end
+            end
+
+            S_READ_ACK_H: begin
+                // SCL HIGH for ACK
+                if (timer == HALF_PERIOD - 1) begin
+                    timer <= 7'd0;
+                    scl_oe <= 1'b1;                // Pull SCL LOW
+                    sda_oe <= 1'b0;                // Release SDA
+                    state <= S_IDLE;
+                end else begin
+                    timer <= timer + 1'b1;
+                end
+            end
+
             default: begin
-                state <= STATE_IDLE;
-                scl_oe <= 1'b0;
-                sda_oe <= 1'b0;
-                busy <= 1'b0;
+                state <= S_IDLE;
             end
         endcase
     end

@@ -28,7 +28,7 @@ configure for sda and scl for open collector, sda is bi-directional
 
 configure for continous conversion
 
-run i2c bus clock in fast mode, 400khz clock frequency
+run i2c bus clock 100khz clock frequency
 
 read channel 0 only
 
@@ -91,6 +91,13 @@ iCE40 open-drain implementation:
 
 when all the steps have been verified, create a comprehensive README.md
 
+● I2C PRD Directives                                                            
+                                                                                
+  1. Command-based interface - Separate START/WRITE/READ/STOP commands, not     
+  single-transaction                                                            
+  2. SB_IO inside i2c_master - Not in top.v                                     
+  3. seen_busy pattern - if (busy) seen_busy<=1; else if (seen_busy) next_state;
+  4. 100 kHz timing - HALF_PERIOD=60, sample ACK at end of HIGH period          
 
-ultrathink
+
 

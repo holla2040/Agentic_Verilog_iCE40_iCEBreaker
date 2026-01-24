@@ -1,290 +1,231 @@
 // ============================================================================
-// ADS1115 I2C ADC Reader - Top Module (Step 5: Error Handling Complete)
+// ADS1115 I2C ADC Reader - Top Level Module (Step 4: Continuous Reading)
 // ============================================================================
 //
-// Reads analog voltage from ADS1115 16-bit ADC via I2C and outputs hex values
-// over UART at 5 readings per second.
+// Reads 16-bit ADC values from ADS1115 and outputs via UART.
 //
-// BEHAVIOR:
-//   1. On power-up, sends "\r\nads1115\r\n" to identify the project
-//   2. Configures ADS1115 (writes 0xC2E3 to config register for continuous mode)
+// OPERATION:
+//   1. Sends "\r\nads1115\r\n" on startup via UART
+//   2. Configures ADS1115 (write to config register 0x01)
 //   3. Sets pointer to conversion register (0x00)
-//   4. Every 200ms, reads conversion result and outputs as hex
+//   4. Every 200ms:
+//      - Reads 16-bit conversion value
+//      - Sends as "0xNNNN\r\n" via UART
+//      - On any NACK: sends 'E' instead
 //
-// I2C SEQUENCES:
-//   Sequence 1 - Configure ADC:
-//     START → [0x90] → [0x01] → [0xC2] → [0xE3] → STOP
-//             addr+W   ptr=cfg   hi byte   lo byte
+// ADS1115 CONFIGURATION (0x96D5):
+//   - MUX[14:12] = 100: AIN0 single-ended (vs GND)
+//   - PGA[11:9]  = 001: +/-4.096V full scale
+//   - MODE[8]    = 0:   Continuous conversion
+//   - DR[7:5]    = 110: 250 SPS
+//   - Rest       = defaults
 //
-//   Sequence 2 - Set pointer to conversion register:
-//     START → [0x90] → [0x00] → STOP
-//             addr+W   ptr=conv
-//
-//   Sequence 3 - Read conversion (repeated every 200ms):
-//     START → [0x91] → [MSB] → ACK → [LSB] → NACK → STOP
-//             addr+R   data_hi        data_lo
-//
-// ERROR HANDLING:
-//   - NACK from slave: outputs "E\r\n" and retries after 200ms
-//   - Bus timeout (>1ms): outputs "E\r\n" and retries after 200ms
-//
-// OUTPUT FORMAT:
-//   "0xNNNN\r\n" where NNNN is 4 hex digits (16-bit ADC value)
-//   "E\r\n" on communication error (NACK or timeout)
-//
-// EXPECTED VALUES (at ±4.096V full scale, 125µV/LSB):
-//   0V    → ~0x0000
-//   1.65V → ~0x3390
-//   3.3V  → ~0x6720
+// HARDWARE:
+//   - iCEBreaker FPGA (12 MHz clock)
+//   - ADS1115 on I2C (SCL=pin 45, SDA=pin 47)
+//   - Button on pin 20 -> ADS1115 ADDR pin
+//   - UART TX on pin 9 (115200 baud)
 //
 // ============================================================================
 
 module top (
-    input  wire clk,        // 12 MHz system clock (pin 35)
-    output wire tx,         // UART transmit (pin 9)
+    input  wire clk,           // 12 MHz system clock
 
-    // I2C bus
-    inout  wire scl,        // I2C clock (pin 45)
-    inout  wire sda,        // I2C data (pin 47)
+    // I2C interface
+    inout  wire scl,           // I2C clock
+    inout  wire sda,           // I2C data
 
-    // Button and address control
-    input  wire btn_n,      // Button (pin 20)
-    output wire addr_out    // Drives ADS1115 ADDR pin (pin 2)
+    // Button and address passthrough
+    input  wire btn_addr,      // Button directly to ADS1115 ADDR
+    output wire ads_addr,      // ADS1115 ADDR pin (directly from button)
+
+    // UART output
+    output wire uart_tx        // UART transmit pin
 );
 
     // ========================================================================
-    // BUTTON TO ADDR DIRECT CONNECTION
-    // ========================================================================
-    // Per PLAN.md - button directly drives ADDR pin
-
-    assign addr_out = btn_n;
-
-    // ========================================================================
-    // TIMING CONSTANTS
+    // BUTTON DIRECTLY TO ADS1115 ADDR
     // ========================================================================
 
-    localparam CLOCKS_PER_200MS = 24'd2_400_000;  // 12 MHz * 0.2s
+    assign ads_addr = btn_addr;
 
     // ========================================================================
-    // I2C CONSTANTS
+    // TIMING PARAMETERS
     // ========================================================================
 
-    localparam I2C_ADDR_WRITE  = 8'h90;  // 0x48 + write bit
-    localparam I2C_ADDR_READ   = 8'h91;  // 0x48 + read bit
-    localparam CONFIG_POINTER  = 8'h01;  // Config register pointer
-    localparam CONVERT_POINTER = 8'h00;  // Conversion register pointer
-    localparam CONFIG_HI       = 8'hC2;  // Config high byte (MODE=0 continuous)
-    localparam CONFIG_LO       = 8'hE3;  // Config low byte
+    // 200ms interval at 12 MHz = 2,400,000 clocks (5 readings/sec)
+    localparam CLOCKS_PER_INTERVAL = 24'd2400000;
 
-    // I2C commands (3-bit)
-    localparam CMD_IDLE  = 3'b000;
-    localparam CMD_START = 3'b001;
-    localparam CMD_WRITE = 3'b010;
-    localparam CMD_READ  = 3'b011;
-    localparam CMD_STOP  = 3'b100;
+    // Startup message: "\r\nads1115\r\n" = 10 characters
+    localparam STARTUP_MSG_LEN = 10;
+
+    // ADC output message: "0xNNNN\r\n" = 8 characters
+    localparam ADC_MSG_LEN = 8;
 
     // ========================================================================
-    // STARTUP MESSAGE: "\r\nads1115\r\n"
+    // ADS1115 I2C PARAMETERS
     // ========================================================================
 
-    localparam STARTUP_MSG_LEN = 11;
+    // I2C addresses (7-bit: 0x48)
+    localparam ADS1115_ADDR_W = 8'h90;  // 0x48 << 1 | 0 (write)
+    localparam ADS1115_ADDR_R = 8'h91;  // 0x48 << 1 | 1 (read)
 
-    reg [7:0] startup_msg [0:STARTUP_MSG_LEN-1];
+    // Register addresses
+    localparam REG_CONVERSION = 8'h00;
+    localparam REG_CONFIG     = 8'h01;
 
-    initial begin
-        startup_msg[0]  = 8'h0D;  // \r
-        startup_msg[1]  = 8'h0A;  // \n
-        startup_msg[2]  = "a";
-        startup_msg[3]  = "d";
-        startup_msg[4]  = "s";
-        startup_msg[5]  = "1";
-        startup_msg[6]  = "1";
-        startup_msg[7]  = "1";
-        startup_msg[8]  = "5";
-        startup_msg[9]  = 8'h0D;  // \r
-        startup_msg[10] = 8'h0A;  // \n
-    end
-
-    // ========================================================================
-    // HEX OUTPUT MESSAGE: "0xNNNN\r\n" (8 characters)
-    // ========================================================================
-
-    localparam HEX_MSG_LEN = 8;
-
-    reg [7:0] hex_msg [0:HEX_MSG_LEN-1];
-
-    initial begin
-        hex_msg[0] = "0";
-        hex_msg[1] = "x";
-        hex_msg[2] = "0";  // Will be set to hex digit
-        hex_msg[3] = "0";  // Will be set to hex digit
-        hex_msg[4] = "0";  // Will be set to hex digit
-        hex_msg[5] = "0";  // Will be set to hex digit
-        hex_msg[6] = 8'h0D;  // \r
-        hex_msg[7] = 8'h0A;  // \n
-    end
+    // Config value: 0xC2C3
+    // Bit 15:    OS=1 (start conversion)
+    // Bit 14-12: MUX=100 (AIN0 vs GND, single-ended)
+    // Bit 11-9:  PGA=001 (+/-4.096V full scale)
+    // Bit 8:     MODE=0 (continuous conversion)
+    // Bit 7-5:   DR=110 (250 SPS)
+    // Bit 4-2:   COMP_MODE=0, COMP_POL=0, COMP_LAT=0
+    // Bit 1-0:   COMP_QUE=11 (comparator disabled)
+    //
+    // MSB: 1100 0010 = 0xC2
+    // LSB: 1100 0011 = 0xC3
+    localparam CONFIG_MSB = 8'hC2;
+    localparam CONFIG_LSB = 8'hC3;
 
     // ========================================================================
-    // ERROR MESSAGE: "E\r\n"
+    // I2C COMMAND DEFINITIONS
     // ========================================================================
 
-    localparam ERROR_MSG_LEN = 3;
-
-    reg [7:0] error_msg [0:ERROR_MSG_LEN-1];
-
-    initial begin
-        error_msg[0] = "E";
-        error_msg[1] = 8'h0D;
-        error_msg[2] = 8'h0A;
-    end
+    localparam CMD_NONE  = 3'd0;
+    localparam CMD_START = 3'd1;
+    localparam CMD_STOP  = 3'd2;
+    localparam CMD_WRITE = 3'd3;
+    localparam CMD_READ  = 3'd4;
 
     // ========================================================================
-    // STATE MACHINE
+    // INTERNAL SIGNALS
     // ========================================================================
 
-    localparam STATE_STARTUP_SEND    = 6'd0;
-    localparam STATE_STARTUP_WAIT    = 6'd1;
-    // Config write states: START → 0x90 → 0x01 → 0xC3 → 0xE3 → STOP
-    localparam STATE_CFG_START_CMD   = 6'd2;
-    localparam STATE_CFG_START_WAIT  = 6'd3;
-    localparam STATE_CFG_ADDR_CMD    = 6'd4;
-    localparam STATE_CFG_ADDR_WAIT   = 6'd5;
-    localparam STATE_CFG_PTR_CMD     = 6'd6;
-    localparam STATE_CFG_PTR_WAIT    = 6'd7;
-    localparam STATE_CFG_HI_CMD      = 6'd8;
-    localparam STATE_CFG_HI_WAIT     = 6'd9;
-    localparam STATE_CFG_LO_CMD      = 6'd10;
-    localparam STATE_CFG_LO_WAIT     = 6'd11;
-    localparam STATE_CFG_STOP_CMD    = 6'd12;
-    localparam STATE_CFG_STOP_WAIT   = 6'd13;
-    // Set pointer to conversion register: START → 0x90 → 0x00 → STOP
-    localparam STATE_PTR_START_CMD   = 6'd14;
-    localparam STATE_PTR_START_WAIT  = 6'd15;
-    localparam STATE_PTR_ADDR_CMD    = 6'd16;
-    localparam STATE_PTR_ADDR_WAIT   = 6'd17;
-    localparam STATE_PTR_REG_CMD     = 6'd18;
-    localparam STATE_PTR_REG_WAIT    = 6'd19;
-    localparam STATE_PTR_STOP_CMD    = 6'd20;
-    localparam STATE_PTR_STOP_WAIT   = 6'd21;
-    // Idle / wait for timer
-    localparam STATE_IDLE            = 6'd22;
-    // Read states: START → 0x91 → [MSB] → ACK → [LSB] → NACK → STOP
-    localparam STATE_RD_START_CMD    = 6'd23;
-    localparam STATE_RD_START_WAIT   = 6'd24;
-    localparam STATE_RD_ADDR_CMD     = 6'd25;
-    localparam STATE_RD_ADDR_WAIT    = 6'd26;
-    localparam STATE_RD_MSB_CMD      = 6'd27;
-    localparam STATE_RD_MSB_WAIT     = 6'd28;
-    localparam STATE_RD_LSB_CMD      = 6'd29;
-    localparam STATE_RD_LSB_WAIT     = 6'd30;
-    localparam STATE_RD_STOP_CMD     = 6'd31;
-    localparam STATE_RD_STOP_WAIT    = 6'd32;
-    // Output states
-    localparam STATE_HEX_SEND        = 6'd33;
-    localparam STATE_HEX_WAIT        = 6'd34;
-    localparam STATE_ERR_SEND        = 6'd35;
-    localparam STATE_ERR_WAIT        = 6'd36;
+    // UART interface signals
+    reg  [7:0] uart_data = 8'd0;
+    reg        uart_start = 1'b0;
+    wire       uart_busy;
 
-    reg [5:0] state;
+    // I2C interface signals
+    reg  [2:0] i2c_cmd = CMD_NONE;
+    reg  [7:0] i2c_data_out = 8'd0;
+    reg        i2c_ack_send = 1'b1;    // ACK to send on read (0=ACK, 1=NACK)
+    reg        i2c_start = 1'b0;
+    wire [7:0] i2c_data_in;
+    wire       i2c_ack;
+    wire       i2c_busy;
+
+    // Startup message buffer
+    reg [7:0] startup_msg [0:9];
+
+    // ADC message buffer: "0xNNNN\r\n"
+    reg [7:0] adc_msg [0:7];
+
+    // Main state machine
+    localparam ST_STARTUP       = 5'd0;
+    localparam ST_CFG_START     = 5'd1;
+    localparam ST_CFG_ADDR      = 5'd2;
+    localparam ST_CFG_REG       = 5'd3;
+    localparam ST_CFG_MSB       = 5'd4;
+    localparam ST_CFG_LSB       = 5'd5;
+    localparam ST_CFG_STOP      = 5'd6;
+    localparam ST_PTR_START     = 5'd7;
+    localparam ST_PTR_ADDR      = 5'd8;
+    localparam ST_PTR_REG       = 5'd9;
+    localparam ST_PTR_STOP      = 5'd10;
+    localparam ST_IDLE          = 5'd11;
+    localparam ST_RD_START      = 5'd12;
+    localparam ST_RD_ADDR       = 5'd13;
+    localparam ST_RD_MSB        = 5'd14;
+    localparam ST_RD_LSB        = 5'd15;
+    localparam ST_RD_STOP       = 5'd16;
+    localparam ST_SEND_ADC      = 5'd17;
+    localparam ST_ERROR         = 5'd18;
+
+    reg [4:0] state = ST_STARTUP;
+    reg [3:0] msg_index = 4'd0;
+    reg       seen_busy = 1'b0;
+    reg       error_flag = 1'b0;
+
+    // ADC reading storage
+    reg [15:0] adc_value = 16'd0;
+
+    // Interval timer
+    reg [23:0] interval_counter = 24'd0;
+    reg        interval_tick = 1'b0;
 
     // ========================================================================
-    // INTERNAL REGISTERS
+    // HEX TO ASCII CONVERSION
     // ========================================================================
 
-    reg [3:0] char_index;       // For UART message transmission
-    reg [23:0] delay_counter;
-    reg       got_nack;         // Set if any NACK received during transaction
-    reg [15:0] adc_value;       // 16-bit ADC result
-
-    // I2C control
-    reg [2:0] i2c_cmd;
-    reg       i2c_cmd_start;
-    wire      i2c_busy;
-    wire      i2c_ack_error;
-    wire      i2c_timeout;
-    reg [7:0] i2c_tx_data;
-    wire [7:0] i2c_rx_data;
-    reg       i2c_send_nack;
-
-    // For detecting I2C command completion
-    reg i2c_busy_prev;
-    wire i2c_done = i2c_busy_prev & ~i2c_busy;
-
-    // UART control
-    reg [7:0] uart_tx_data;
-    reg       uart_tx_start;
-    wire      uart_tx_busy;
+    function [7:0] hex_to_ascii;
+        input [3:0] nibble;
+        begin
+            if (nibble < 10)
+                hex_to_ascii = 8'h30 + nibble;  // '0' + value
+            else
+                hex_to_ascii = 8'h41 + (nibble - 10);  // 'A' + (value - 10)
+        end
+    endfunction
 
     // ========================================================================
     // INITIALIZATION
     // ========================================================================
 
     initial begin
-        state = STATE_STARTUP_SEND;
-        char_index = 0;
-        delay_counter = 0;
-        got_nack = 0;
-        adc_value = 0;
-        i2c_cmd = CMD_IDLE;
-        i2c_cmd_start = 0;
-        i2c_tx_data = 0;
-        i2c_send_nack = 0;
-        i2c_busy_prev = 0;
-        uart_tx_data = 0;
-        uart_tx_start = 0;
+        startup_msg[0] = 8'h0D;  // \r
+        startup_msg[1] = 8'h0A;  // \n
+        startup_msg[2] = "a";
+        startup_msg[3] = "d";
+        startup_msg[4] = "s";
+        startup_msg[5] = "1";
+        startup_msg[6] = "1";
+        startup_msg[7] = "1";
+        startup_msg[8] = "5";
+        startup_msg[9] = 8'h0A;  // \n
     end
 
     // ========================================================================
-    // NIBBLE TO HEX ASCII CONVERSION
-    // ========================================================================
-    // Convert 4-bit value to ASCII hex character
-
-    function [7:0] nibble_to_hex;
-        input [3:0] nibble;
-        begin
-            if (nibble < 10)
-                nibble_to_hex = 8'h30 + nibble;  // '0'-'9'
-            else
-                nibble_to_hex = 8'h41 + (nibble - 10);  // 'A'-'F'
-        end
-    endfunction
-
-    // ========================================================================
-    // I2C MASTER INSTANCE
+    // MODULE INSTANTIATIONS
     // ========================================================================
 
-    i2c_master i2c_inst (
+    uart_tx #(
+        .CLOCKS_PER_BIT(104)
+    ) u_uart (
+        .clk(clk),
+        .data_i(uart_data),
+        .start_i(uart_start),
+        .busy_o(uart_busy),
+        .tx_o(uart_tx)
+    );
+
+    i2c_master u_i2c (
         .clk(clk),
         .scl(scl),
         .sda(sda),
-        .cmd(i2c_cmd),
-        .cmd_start(i2c_cmd_start),
-        .busy(i2c_busy),
-        .ack_error(i2c_ack_error),
-        .timeout(i2c_timeout),
-        .tx_data(i2c_tx_data),
-        .rx_data(i2c_rx_data),
-        .send_nack(i2c_send_nack)
+        .cmd_i(i2c_cmd),
+        .data_i(i2c_data_out),
+        .ack_i(i2c_ack_send),
+        .start_i(i2c_start),
+        .data_o(i2c_data_in),
+        .ack_o(i2c_ack),
+        .busy_o(i2c_busy)
     );
 
     // ========================================================================
-    // UART TRANSMITTER INSTANCE
-    // ========================================================================
-
-    uart_tx uart_inst (
-        .clk(clk),
-        .tx_data(uart_tx_data),
-        .tx_start(uart_tx_start),
-        .tx_busy(uart_tx_busy),
-        .tx(tx)
-    );
-
-    // ========================================================================
-    // I2C BUSY EDGE DETECTION
+    // INTERVAL TIMER (200ms = 5 readings/sec)
     // ========================================================================
 
     always @(posedge clk) begin
-        i2c_busy_prev <= i2c_busy;
+        interval_tick <= 1'b0;
+
+        if (interval_counter == CLOCKS_PER_INTERVAL - 1) begin
+            interval_counter <= 24'd0;
+            interval_tick <= 1'b1;
+        end else begin
+            interval_counter <= interval_counter + 1'b1;
+        end
     end
 
     // ========================================================================
@@ -292,337 +233,312 @@ module top (
     // ========================================================================
 
     always @(posedge clk) begin
-        // Default: clear start pulses after one clock
-        uart_tx_start <= 1'b0;
-        i2c_cmd_start <= 1'b0;
+        // Defaults
+        uart_start <= 1'b0;
+        i2c_start <= 1'b0;
+
+        // Track I2C command completion
+        if (i2c_busy) begin
+            seen_busy <= 1'b1;
+        end
 
         case (state)
             // ================================================================
-            // STARTUP MESSAGE TRANSMISSION
+            // STARTUP: Send startup message
             // ================================================================
-
-            STATE_STARTUP_SEND: begin
-                if (!uart_tx_busy) begin
-                    uart_tx_data <= startup_msg[char_index];
-                    uart_tx_start <= 1'b1;
-                    state <= STATE_STARTUP_WAIT;
-                end
-            end
-
-            STATE_STARTUP_WAIT: begin
-                if (!uart_tx_busy && !uart_tx_start) begin
-                    if (char_index == STARTUP_MSG_LEN - 1) begin
-                        char_index <= 0;
-                        got_nack <= 1'b0;
-                        state <= STATE_CFG_START_CMD;
+            ST_STARTUP: begin
+                if (!uart_busy && !uart_start) begin
+                    if (msg_index < STARTUP_MSG_LEN) begin
+                        uart_data <= startup_msg[msg_index];
+                        uart_start <= 1'b1;
+                        msg_index <= msg_index + 1'b1;
                     end else begin
-                        char_index <= char_index + 1;
-                        state <= STATE_STARTUP_SEND;
+                        msg_index <= 4'd0;
+                        state <= ST_CFG_START;
                     end
                 end
             end
 
             // ================================================================
-            // CONFIGURATION WRITE SEQUENCE
-            // START → 0x90 → 0x01 → 0xC3 → 0xE3 → STOP
+            // CONFIGURE ADS1115: Write config register
+            // Sequence: START -> 0x90 -> 0x01 -> 0x96 -> 0xD5 -> STOP
             // ================================================================
 
-            STATE_CFG_START_CMD: begin
+            ST_CFG_START: begin
                 i2c_cmd <= CMD_START;
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_CFG_START_WAIT;
+                i2c_start <= 1'b1;
+                seen_busy <= 1'b0;
+                error_flag <= 1'b0;
+                state <= ST_CFG_ADDR;
             end
 
-            STATE_CFG_START_WAIT: begin
-                if (i2c_done) state <= STATE_CFG_ADDR_CMD;
-            end
-
-            STATE_CFG_ADDR_CMD: begin
-                i2c_cmd <= CMD_WRITE;
-                i2c_tx_data <= I2C_ADDR_WRITE;
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_CFG_ADDR_WAIT;
-            end
-
-            STATE_CFG_ADDR_WAIT: begin
-                if (i2c_done) begin
-                    if (i2c_ack_error || i2c_timeout) got_nack <= 1'b1;
-                    state <= STATE_CFG_PTR_CMD;
+            ST_CFG_ADDR: begin
+                if (!i2c_busy && seen_busy) begin
+                    i2c_cmd <= CMD_WRITE;
+                    i2c_data_out <= ADS1115_ADDR_W;
+                    i2c_start <= 1'b1;
+                    seen_busy <= 1'b0;
+                    state <= ST_CFG_REG;
                 end
             end
 
-            STATE_CFG_PTR_CMD: begin
-                i2c_cmd <= CMD_WRITE;
-                i2c_tx_data <= CONFIG_POINTER;
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_CFG_PTR_WAIT;
-            end
-
-            STATE_CFG_PTR_WAIT: begin
-                if (i2c_done) begin
-                    if (i2c_ack_error || i2c_timeout) got_nack <= 1'b1;
-                    state <= STATE_CFG_HI_CMD;
-                end
-            end
-
-            STATE_CFG_HI_CMD: begin
-                i2c_cmd <= CMD_WRITE;
-                i2c_tx_data <= CONFIG_HI;
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_CFG_HI_WAIT;
-            end
-
-            STATE_CFG_HI_WAIT: begin
-                if (i2c_done) begin
-                    if (i2c_ack_error || i2c_timeout) got_nack <= 1'b1;
-                    state <= STATE_CFG_LO_CMD;
-                end
-            end
-
-            STATE_CFG_LO_CMD: begin
-                i2c_cmd <= CMD_WRITE;
-                i2c_tx_data <= CONFIG_LO;
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_CFG_LO_WAIT;
-            end
-
-            STATE_CFG_LO_WAIT: begin
-                if (i2c_done) begin
-                    if (i2c_ack_error || i2c_timeout) got_nack <= 1'b1;
-                    state <= STATE_CFG_STOP_CMD;
-                end
-            end
-
-            STATE_CFG_STOP_CMD: begin
-                i2c_cmd <= CMD_STOP;
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_CFG_STOP_WAIT;
-            end
-
-            STATE_CFG_STOP_WAIT: begin
-                if (i2c_done) begin
-                    // If config failed, go to error, else set pointer to conversion reg
-                    if (got_nack) begin
-                        char_index <= 0;
-                        state <= STATE_ERR_SEND;
+            ST_CFG_REG: begin
+                if (!i2c_busy && seen_busy) begin
+                    if (i2c_ack) begin  // NACK
+                        error_flag <= 1'b1;
+                        i2c_cmd <= CMD_STOP;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_ERROR;
                     end else begin
-                        state <= STATE_PTR_START_CMD;
+                        i2c_cmd <= CMD_WRITE;
+                        i2c_data_out <= REG_CONFIG;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_CFG_MSB;
+                    end
+                end
+            end
+
+            ST_CFG_MSB: begin
+                if (!i2c_busy && seen_busy) begin
+                    if (i2c_ack) begin
+                        error_flag <= 1'b1;
+                        i2c_cmd <= CMD_STOP;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_ERROR;
+                    end else begin
+                        i2c_cmd <= CMD_WRITE;
+                        i2c_data_out <= CONFIG_MSB;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_CFG_LSB;
+                    end
+                end
+            end
+
+            ST_CFG_LSB: begin
+                if (!i2c_busy && seen_busy) begin
+                    if (i2c_ack) begin
+                        error_flag <= 1'b1;
+                        i2c_cmd <= CMD_STOP;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_ERROR;
+                    end else begin
+                        i2c_cmd <= CMD_WRITE;
+                        i2c_data_out <= CONFIG_LSB;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_CFG_STOP;
+                    end
+                end
+            end
+
+            ST_CFG_STOP: begin
+                if (!i2c_busy && seen_busy) begin
+                    if (i2c_ack) begin
+                        error_flag <= 1'b1;
+                        i2c_cmd <= CMD_STOP;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_ERROR;
+                    end else begin
+                        i2c_cmd <= CMD_STOP;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_PTR_START;
                     end
                 end
             end
 
             // ================================================================
-            // SET POINTER TO CONVERSION REGISTER
-            // START → 0x90 → 0x00 → STOP
+            // SET POINTER: Point to conversion register
+            // Sequence: START -> 0x90 -> 0x00 -> STOP
             // ================================================================
 
-            STATE_PTR_START_CMD: begin
-                i2c_cmd <= CMD_START;
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_PTR_START_WAIT;
-            end
-
-            STATE_PTR_START_WAIT: begin
-                if (i2c_done) state <= STATE_PTR_ADDR_CMD;
-            end
-
-            STATE_PTR_ADDR_CMD: begin
-                i2c_cmd <= CMD_WRITE;
-                i2c_tx_data <= I2C_ADDR_WRITE;
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_PTR_ADDR_WAIT;
-            end
-
-            STATE_PTR_ADDR_WAIT: begin
-                if (i2c_done) begin
-                    if (i2c_ack_error || i2c_timeout) got_nack <= 1'b1;
-                    state <= STATE_PTR_REG_CMD;
+            ST_PTR_START: begin
+                if (!i2c_busy && seen_busy) begin
+                    i2c_cmd <= CMD_START;
+                    i2c_start <= 1'b1;
+                    seen_busy <= 1'b0;
+                    state <= ST_PTR_ADDR;
                 end
             end
 
-            STATE_PTR_REG_CMD: begin
-                i2c_cmd <= CMD_WRITE;
-                i2c_tx_data <= CONVERT_POINTER;  // 0x00
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_PTR_REG_WAIT;
-            end
-
-            STATE_PTR_REG_WAIT: begin
-                if (i2c_done) begin
-                    if (i2c_ack_error || i2c_timeout) got_nack <= 1'b1;
-                    state <= STATE_PTR_STOP_CMD;
+            ST_PTR_ADDR: begin
+                if (!i2c_busy && seen_busy) begin
+                    i2c_cmd <= CMD_WRITE;
+                    i2c_data_out <= ADS1115_ADDR_W;
+                    i2c_start <= 1'b1;
+                    seen_busy <= 1'b0;
+                    state <= ST_PTR_REG;
                 end
             end
 
-            STATE_PTR_STOP_CMD: begin
-                i2c_cmd <= CMD_STOP;
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_PTR_STOP_WAIT;
-            end
-
-            STATE_PTR_STOP_WAIT: begin
-                if (i2c_done) begin
-                    if (got_nack) begin
-                        char_index <= 0;
-                        state <= STATE_ERR_SEND;
+            ST_PTR_REG: begin
+                if (!i2c_busy && seen_busy) begin
+                    if (i2c_ack) begin
+                        error_flag <= 1'b1;
+                        i2c_cmd <= CMD_STOP;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_ERROR;
                     end else begin
-                        // Pointer set, now read the conversion data
-                        state <= STATE_RD_START_CMD;
+                        i2c_cmd <= CMD_WRITE;
+                        i2c_data_out <= REG_CONVERSION;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_PTR_STOP;
+                    end
+                end
+            end
+
+            ST_PTR_STOP: begin
+                if (!i2c_busy && seen_busy) begin
+                    if (i2c_ack) begin
+                        error_flag <= 1'b1;
+                        i2c_cmd <= CMD_STOP;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_ERROR;
+                    end else begin
+                        i2c_cmd <= CMD_STOP;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_IDLE;
                     end
                 end
             end
 
             // ================================================================
-            // IDLE: Wait for 200ms timer
+            // IDLE: Wait for interval tick, then read ADC
             // ================================================================
 
-            STATE_IDLE: begin
-                if (delay_counter == CLOCKS_PER_200MS - 1) begin
-                    delay_counter <= 0;
-                    got_nack <= 1'b0;
-                    // Set pointer to conversion register before each read
-                    state <= STATE_PTR_START_CMD;
-                end else begin
-                    delay_counter <= delay_counter + 1;
+            ST_IDLE: begin
+                if (!i2c_busy && seen_busy) begin
+                    // STOP from previous operation completed
+                    seen_busy <= 1'b0;
+                end
+
+                if (interval_tick && !seen_busy) begin
+                    i2c_cmd <= CMD_START;
+                    i2c_start <= 1'b1;
+                    seen_busy <= 1'b0;
+                    error_flag <= 1'b0;
+                    state <= ST_RD_START;
                 end
             end
 
             // ================================================================
-            // READ CONVERSION SEQUENCE
-            // START → 0x91 → [MSB] ACK → [LSB] NACK → STOP
+            // READ ADC: Read 16-bit conversion value
+            // Sequence: START -> 0x91 -> MSB(ACK) -> LSB(NACK) -> STOP
             // ================================================================
 
-            STATE_RD_START_CMD: begin
-                i2c_cmd <= CMD_START;
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_RD_START_WAIT;
-            end
-
-            STATE_RD_START_WAIT: begin
-                if (i2c_done) state <= STATE_RD_ADDR_CMD;
-            end
-
-            STATE_RD_ADDR_CMD: begin
-                i2c_cmd <= CMD_WRITE;
-                i2c_tx_data <= I2C_ADDR_READ;
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_RD_ADDR_WAIT;
-            end
-
-            STATE_RD_ADDR_WAIT: begin
-                if (i2c_done) begin
-                    if (i2c_ack_error || i2c_timeout) got_nack <= 1'b1;
-                    state <= STATE_RD_MSB_CMD;
+            ST_RD_START: begin
+                if (!i2c_busy && seen_busy) begin
+                    i2c_cmd <= CMD_WRITE;
+                    i2c_data_out <= ADS1115_ADDR_R;
+                    i2c_start <= 1'b1;
+                    seen_busy <= 1'b0;
+                    state <= ST_RD_ADDR;
                 end
             end
 
-            STATE_RD_MSB_CMD: begin
-                i2c_cmd <= CMD_READ;
-                i2c_send_nack <= 1'b0;  // Send ACK after MSB
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_RD_MSB_WAIT;
-            end
-
-            STATE_RD_MSB_WAIT: begin
-                if (i2c_done) begin
-                    adc_value[15:8] <= i2c_rx_data;
-                    state <= STATE_RD_LSB_CMD;
-                end
-            end
-
-            STATE_RD_LSB_CMD: begin
-                i2c_cmd <= CMD_READ;
-                i2c_send_nack <= 1'b1;  // Send NACK after LSB (end of read)
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_RD_LSB_WAIT;
-            end
-
-            STATE_RD_LSB_WAIT: begin
-                if (i2c_done) begin
-                    adc_value[7:0] <= i2c_rx_data;
-                    state <= STATE_RD_STOP_CMD;
-                end
-            end
-
-            STATE_RD_STOP_CMD: begin
-                i2c_cmd <= CMD_STOP;
-                i2c_cmd_start <= 1'b1;
-                state <= STATE_RD_STOP_WAIT;
-            end
-
-            STATE_RD_STOP_WAIT: begin
-                if (i2c_done) begin
-                    char_index <= 0;
-                    if (got_nack) begin
-                        state <= STATE_ERR_SEND;
+            ST_RD_ADDR: begin
+                if (!i2c_busy && seen_busy) begin
+                    if (i2c_ack) begin
+                        error_flag <= 1'b1;
+                        i2c_cmd <= CMD_STOP;
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_ERROR;
                     end else begin
-                        // Convert ADC value to hex string
-                        hex_msg[2] <= nibble_to_hex(adc_value[15:12]);
-                        hex_msg[3] <= nibble_to_hex(adc_value[11:8]);
-                        hex_msg[4] <= nibble_to_hex(adc_value[7:4]);
-                        hex_msg[5] <= nibble_to_hex(adc_value[3:0]);
-                        state <= STATE_HEX_SEND;
+                        i2c_cmd <= CMD_READ;
+                        i2c_ack_send <= 1'b0;  // Send ACK after MSB
+                        i2c_start <= 1'b1;
+                        seen_busy <= 1'b0;
+                        state <= ST_RD_MSB;
+                    end
+                end
+            end
+
+            ST_RD_MSB: begin
+                if (!i2c_busy && seen_busy) begin
+                    adc_value[15:8] <= i2c_data_in;
+                    i2c_cmd <= CMD_READ;
+                    i2c_ack_send <= 1'b1;  // Send NACK after LSB (last byte)
+                    i2c_start <= 1'b1;
+                    seen_busy <= 1'b0;
+                    state <= ST_RD_LSB;
+                end
+            end
+
+            ST_RD_LSB: begin
+                if (!i2c_busy && seen_busy) begin
+                    adc_value[7:0] <= i2c_data_in;
+                    i2c_cmd <= CMD_STOP;
+                    i2c_start <= 1'b1;
+                    seen_busy <= 1'b0;
+                    state <= ST_RD_STOP;
+                end
+            end
+
+            ST_RD_STOP: begin
+                if (!i2c_busy && seen_busy) begin
+                    // Format message: "0xNNNN\r\n"
+                    adc_msg[0] <= "0";
+                    adc_msg[1] <= "x";
+                    adc_msg[2] <= hex_to_ascii(adc_value[15:12]);
+                    adc_msg[3] <= hex_to_ascii(adc_value[11:8]);
+                    adc_msg[4] <= hex_to_ascii(adc_value[7:4]);
+                    adc_msg[5] <= hex_to_ascii(adc_value[3:0]);
+                    adc_msg[6] <= 8'h0D;  // \r
+                    adc_msg[7] <= 8'h0A;  // \n
+
+                    msg_index <= 4'd0;
+                    seen_busy <= 1'b0;
+                    state <= ST_SEND_ADC;
+                end
+            end
+
+            // ================================================================
+            // SEND ADC VALUE: Transmit "0xNNNN\r\n" via UART
+            // ================================================================
+
+            ST_SEND_ADC: begin
+                if (!uart_busy && !uart_start) begin
+                    if (msg_index < ADC_MSG_LEN) begin
+                        uart_data <= adc_msg[msg_index];
+                        uart_start <= 1'b1;
+                        msg_index <= msg_index + 1'b1;
+                    end else begin
+                        msg_index <= 4'd0;
+                        state <= ST_IDLE;
                     end
                 end
             end
 
             // ================================================================
-            // HEX OUTPUT: "0xNNNN\r\n"
+            // ERROR: Send 'E' and return to idle
             // ================================================================
 
-            STATE_HEX_SEND: begin
-                if (!uart_tx_busy) begin
-                    uart_tx_data <= hex_msg[char_index];
-                    uart_tx_start <= 1'b1;
-                    state <= STATE_HEX_WAIT;
+            ST_ERROR: begin
+                if (!i2c_busy && seen_busy) begin
+                    // STOP completed
+                    seen_busy <= 1'b0;
+                end
+
+                if (!uart_busy && !uart_start && !seen_busy) begin
+                    uart_data <= "E";
+                    uart_start <= 1'b1;
+                    state <= ST_IDLE;
                 end
             end
-
-            STATE_HEX_WAIT: begin
-                if (!uart_tx_busy && !uart_tx_start) begin
-                    if (char_index == HEX_MSG_LEN - 1) begin
-                        char_index <= 0;
-                        delay_counter <= 0;
-                        state <= STATE_IDLE;
-                    end else begin
-                        char_index <= char_index + 1;
-                        state <= STATE_HEX_SEND;
-                    end
-                end
-            end
-
-            // ================================================================
-            // ERROR OUTPUT: "E\r\n"
-            // ================================================================
-
-            STATE_ERR_SEND: begin
-                if (!uart_tx_busy) begin
-                    uart_tx_data <= error_msg[char_index];
-                    uart_tx_start <= 1'b1;
-                    state <= STATE_ERR_WAIT;
-                end
-            end
-
-            STATE_ERR_WAIT: begin
-                if (!uart_tx_busy && !uart_tx_start) begin
-                    if (char_index == ERROR_MSG_LEN - 1) begin
-                        char_index <= 0;
-                        delay_counter <= 0;
-                        state <= STATE_IDLE;
-                    end else begin
-                        char_index <= char_index + 1;
-                        state <= STATE_ERR_SEND;
-                    end
-                end
-            end
-
-            // ================================================================
-            // DEFAULT: Start from beginning
-            // ================================================================
 
             default: begin
-                state <= STATE_STARTUP_SEND;
-                char_index <= 0;
+                state <= ST_STARTUP;
             end
         endcase
     end
