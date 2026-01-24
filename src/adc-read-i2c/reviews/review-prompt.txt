@@ -1,0 +1,1 @@
+ You are an expert at FPGA programming, particully using Veralog. I want you to      review the following directory of the project and give me your comprehensive        review of how this project is implemented from a technical standpoint and as        well as documentation. /src/adc-read-i2c
