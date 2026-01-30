@@ -302,17 +302,202 @@ Implementation: Instantiate spi_master with CPOL=0, CPHA=1, WIDTH=16. Format: `{
 
 #### Verification
 
-1. **Synthesis check** (no hardware):
-   ```bash
-   cd src/lib
-   for f in *.v; do yosys -p "synth_ice40 -top ${f%.v}" $f; done
-   ```
+Three levels of testing, in order of complexity:
 
-2. **Hardware verification** (optional test project):
-   - Create `src/lib-test/` project
-   - Instantiate uart_tx + uart_rx for loopback test
-   - Instantiate ads1115 and verify against adc-read-i2c output
-   - Instantiate ad7476a + dac121s101 and verify against dac-adc-loopback output
+---
+
+##### Level 1: Synthesis Check (Minimum - No Hardware)
+
+Verifies Verilog is syntactically correct and synthesizable for iCE40. Catches syntax errors and unsynthesizable constructs but does NOT verify behavior.
+
+```bash
+cd src/lib
+
+# Test each module individually
+yosys -p "synth_ice40 -top uart_tx" uart_tx.v
+yosys -p "synth_ice40 -top uart_rx" uart_rx.v
+yosys -p "synth_ice40 -top i2c_master" i2c_master.v
+yosys -p "synth_ice40 -top spi_master" spi_master.v
+
+# Device wrappers need their dependencies
+yosys -p "synth_ice40 -top ads1115" ads1115.v i2c_master.v
+yosys -p "synth_ice40 -top ad7476a" ad7476a.v spi_master.v
+yosys -p "synth_ice40 -top dac121s101" dac121s101.v spi_master.v
+```
+
+**Pass criteria**: No errors, reasonable cell count (compare to original implementations).
+
+---
+
+##### Level 2: Simulation with Testbenches (Recommended - No Hardware)
+
+Write testbenches using Icarus Verilog to verify correct behavior. This is critical for `spi_master.v` to prove the CPHA=0 fix works.
+
+**Testbench files to create** in `src/lib/tb/`:
+
+| Testbench | Verifies |
+|-----------|----------|
+| `uart_tx_tb.v` | Start bit, 8 data bits (LSB first), stop bit, timing, ready_o behavior |
+| `uart_rx_tb.v` | 2-FF synchronizer, mid-bit sampling, valid_o pulse, data_o correctness |
+| `spi_master_tb.v` | All 4 CPOL/CPHA modes, first-bit capture (the bug fix), CS timing |
+| `i2c_master_tb.v` | START/STOP conditions, ACK/NACK, byte read/write, open-drain behavior |
+
+**Running testbenches**:
+```bash
+cd src/lib/tb
+iverilog -o uart_tx_tb.vvp uart_tx_tb.v ../uart_tx.v
+vvp uart_tx_tb.vvp
+gtkwave uart_tx.vcd  # Optional: view waveforms
+```
+
+**Testbench specifications**:
+
+###### uart_tx_tb.v
+```verilog
+// Test cases:
+// 1. Reset behavior: tx_o=HIGH, ready_o=HIGH after reset
+// 2. Single byte: Send 0x55 (alternating bits), verify timing
+// 3. Back-to-back: Send two bytes, verify ready_o transitions
+// 4. Timing: Verify each bit is exactly CLOCKS_PER_BIT cycles
+
+// Self-checking: Use $display to show PASS/FAIL for each test
+// Generate VCD: $dumpfile("uart_tx.vcd"); $dumpvars(0, uart_tx_tb);
+```
+
+###### uart_rx_tb.v
+```verilog
+// Test cases:
+// 1. Reset behavior: valid_o=LOW after reset
+// 2. Receive 0x55: Inject serial waveform, verify data_o
+// 3. Receive 0xAA: Verify LSB-first reception
+// 4. Noise rejection: Glitch during idle should not trigger reception
+// 5. valid_o pulse: Must be exactly 1 clock cycle
+
+// Stimulus: Generate rx_i waveform with correct timing
+// Use task to send a byte: task send_byte(input [7:0] data);
+```
+
+###### spi_master_tb.v (CRITICAL - must verify CPHA=0 fix)
+```verilog
+// Test cases for EACH of the 4 modes (parameterized testbench):
+//
+// Mode 0 (CPOL=0, CPHA=0) - THE BUG FIX TEST:
+//   1. Simulate slave that outputs data on CS fall (like AD7476A)
+//   2. Verify FIRST bit is captured correctly (not missed!)
+//   3. Verify sample occurs on RISING edge
+//   4. Verify shift occurs on FALLING edge
+//
+// Mode 1 (CPOL=0, CPHA=1):
+//   1. Verify sample on FALLING edge
+//   2. Verify shift on RISING edge
+//
+// Mode 2 (CPOL=1, CPHA=0):
+//   1. Verify SCLK idles HIGH
+//   2. Verify sample on FALLING edge
+//
+// Mode 3 (CPOL=1, CPHA=1):
+//   1. Verify SCLK idles HIGH
+//   2. Verify sample on RISING edge
+//
+// All modes:
+//   - Verify CS_n timing (assert before first clock, deassert after last)
+//   - Verify ready_o behavior
+//   - Verify data_o contains correct received data
+//   - Test different WIDTH values (8, 12, 16)
+
+// Simulated SPI slave model:
+module spi_slave_model #(parameter CPOL=0, CPHA=0, WIDTH=8) (
+    input  wire cs_n,
+    input  wire sclk,
+    input  wire mosi,
+    output reg  miso,
+    input  wire [WIDTH-1:0] tx_data,  // Data slave sends to master
+    output reg  [WIDTH-1:0] rx_data   // Data slave receives from master
+);
+    // Implement slave behavior based on CPOL/CPHA
+endmodule
+```
+
+###### i2c_master_tb.v
+```verilog
+// Test cases:
+// 1. START condition: SDA falls while SCL HIGH
+// 2. STOP condition: SDA rises while SCL HIGH
+// 3. Write byte with ACK: Slave pulls SDA LOW on 9th clock
+// 4. Write byte with NACK: SDA stays HIGH on 9th clock
+// 5. Read byte with ACK: Master pulls SDA LOW on 9th clock
+// 6. Read byte with NACK: Master releases SDA on 9th clock
+// 7. Full transaction: START + address + data + STOP
+
+// Simulated I2C slave model:
+module i2c_slave_model #(parameter ADDR=7'h48) (
+    inout wire scl,
+    inout wire sda
+);
+    // Implement slave that responds to address, ACKs, provides read data
+endmodule
+```
+
+**Pass criteria**:
+- All test cases print "PASS"
+- No timing violations
+- Waveforms match expected behavior when viewed in GTKWave
+
+---
+
+##### Level 3: Hardware Verification (Gold Standard)
+
+Create `src/lib-test/` project that verifies library modules with real hardware.
+
+**Project structure**:
+```
+src/lib-test/
+├── Makefile
+├── icebreaker.pcf
+├── top.v              # Test harness
+└── README.md          # Test procedures
+```
+
+**Test configurations** (select via DIP switch or recompile):
+
+###### Test A: UART Loopback
+- Connect TX pin to RX pin (external wire jumper)
+- Send bytes via USB-UART, verify they echo back
+- Tests: `uart_tx.v` + `uart_rx.v`
+
+```verilog
+// top.v for UART loopback
+uart_rx rx_inst (.clk_i(clk), .rx_i(rx_pin), .data_o(rx_data), .valid_o(rx_valid));
+uart_tx tx_inst (.clk_i(clk), .data_i(rx_data), .start_i(rx_valid), .tx_o(tx_pin));
+```
+
+**Pass criteria**: Every character typed in terminal echoes back correctly.
+
+###### Test B: I2C ADS1115 Read
+- Connect ADS1115 breakout to PMOD connector
+- Read ADC value, send via UART
+- Compare output to `adc-read-i2c` project
+- Tests: `i2c_master.v` + `ads1115.v` + `uart_tx.v`
+
+**Pass criteria**: ADC readings match `adc-read-i2c` output (same voltage = same hex value).
+
+###### Test C: SPI DAC-ADC Loopback
+- Connect PMOD DA2 (DAC) output to PMOD AD1 (ADC) input
+- Write ramp to DAC, read from ADC, send via UART
+- Compare output to `dac-adc-loopback` project
+- Tests: `spi_master.v` + `ad7476a.v` + `dac121s101.v` + `uart_tx.v`
+
+**Pass criteria**:
+- ADC readings track DAC output (linear relationship)
+- No bit-shift errors (the CPHA=0 bug would cause incorrect values)
+- Compare to `dac-adc-loopback` output at same DAC values
+
+###### Test D: SPI Mode Verification (if logic analyzer available)
+- Capture SPI waveforms with logic analyzer (Saleae, etc.)
+- Verify clock polarity and phase match configured mode
+- Verify CS timing relative to first/last clock edge
+
+**Pass criteria**: Waveforms match SPI mode specification.
 
 ---
 
