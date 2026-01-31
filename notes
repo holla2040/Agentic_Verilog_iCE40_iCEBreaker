@@ -1,0 +1,263 @@
+* YouTube Video Talking Points: Designing a Reusable Verilog Library
+
+  Opening: The Problem
+
+  Existing projects work but each has its own copy of uart_tx, i2c_master, etc.
+  Want to create src/lib/ for future projects to share
+  Existing projects are "published" - won't modify them
+
+  Decision 1: Interface Conventions (ready_o vs busy_o)
+
+  The Setup:
+  - TODO.md already had a proposed interface with ready_o
+  - But all existing modules in the codebase use busy_o
+  - These are inverted logic - opposite meanings:
+    - busy_o = 1 means "I'm working, don't send more"
+    - ready_o = 1 means "I'm idle, ready to accept data"
+
+  The Question I Asked:
+  - "Which do you prefer for the canonical library?"
+  - User said "give me recommendations from an industry perspective"
+
+  The Industry Reasoning:
+
+  1. AXI-Stream convention - the dominant standard for FPGA IP
+    - Uses TREADY/TVALID handshaking
+    - "ready" means "I can accept data now"
+    - Xilinx, Intel, and professional IP cores all use this
+  2. Positive logic for enable signals - code reads more naturally with ready:
+
+  2. Clear intent:
+  if (uart_ready && data_valid)
+  uart_start <= 1;
+  vs. double-negative (harder to read):
+  if (!uart_busy && data_valid)
+  uart_start <= 1;
+  3. FIFO conventions - standard FIFOs use ready/valid, not busy
+  4. Scales better - when you later add AXI wrappers or FIFO interfaces, naming
+  already matches
+
+  The Implementation Impact:
+  - Not just a rename - it's an inversion
+  - Existing code has reg busy_o that gets set/cleared
+  - Library version needs internal busy reg, then assign ready_o = ~busy
+
+  The Takeaway:
+  - busy_o isn't wrong - it's perfectly clear for simple designs
+  - But for a canonical library meant to establish conventions, ready_o aligns with
+  industry standards
+  - Small decision, but sets the tone for professional-quality IP
+
+  Also decided: rst_i for reset, _i/_o/_io suffixes
+
+  Decision 2: What About the SPI Code?
+
+  "I had a lot of problems with dac-adc-loopback getting it to work"
+  Asked me to investigate why combining ADC + DAC was so hard
+
+  Findings:
+  - ADC and DAC have different SPI timing requirements
+  - Discovered the bit-shift bug: [12:1] extraction is a band-aid
+  - Root cause: CPHA=0 implemented wrong - missing first bit
+
+  Conclusion: Don't use existing SPI code as reference, create new spi_master.v
+
+  Decision 3: Protocol vs Device Modules
+
+  Generic spi_master.v won't work for all devices (timing varies too much)
+  Solution: Two-tier architecture
+  - Protocol level: uart_tx, uart_rx, i2c_master, spi_master
+  - Device level: ads1115, ad7476a, dac121s101 (wrap protocol modules)
+  Device wrappers encapsulate quirks, provide clean "read_value" interface
+
+  Decision 4: What About uart_rx?
+
+  I initially left it out
+  User caught this - "why isn't uart_rx in the list?"
+  Found src/uart-rx/ exists but it's a demo (has LED output, not reusable)
+  Added to plan: extract and refactor into proper library module
+
+  The SPI Bug Explanation (Good Visual)
+
+  Show the SPI mode table (CPOL/CPHA)
+
+  The bug: Code does CS fall, then falling edge, then sample on rising
+  Correct for CPHA=0: CS fall, slave outputs first bit immediately, sample on rising
+  First bit is already there before any clock edge!
+
+  What happened (BUG):
+  1. CS falls
+  2. Create falling SCLK edge
+  3. Sample on rising edge
+  4. Missed first bit!
+
+  What should happen (CORRECT):
+  1. CS falls
+  2. Slave outputs first bit (already present!)
+  3. Rising SCLK edge - sample here
+  4. Falling SCLK edge - slave shifts next bit
+
+  Testing Strategy
+
+  Level 1: Synthesis check (yosys) - catches syntax errors only
+  Level 2: Testbenches (iverilog) - critical for proving SPI fix works
+  Level 3: Hardware verification - loopback tests, compare to existing projects
+
+  Wrap-up
+
+  Updated TODO.md with complete spec (~300 lines)
+  Another agent (or future self) can implement from this spec
+  Key lesson: Don't copy buggy code - understand the problem first
+
+  Memorable Quotes/Moments
+
+  "The [12:1] bit extraction is a band-aid fix, not a proper solution"
+  "SPI timing varies too much between devices" - why device wrappers exist
+  The CPHA=0 bug table showing "What happened (BUG)" vs "What should happen
+  (CORRECT)"
+
+
+-----------------------------------------------------
+
+ Pseudo-Transcript: A.2 Shared Module Library Discussion
+
+  USER: look at /TODO.md, let's discuss A.2 after you explore the code base
+
+  CLAUDE: Read TODO.md, then launched an exploration agent to find all UART and I2C
+  implementations. Found 3 copies of uart_tx across projects (two identical, one
+  with reset support), 2 copies of i2c_master. Presented a summary table and
+  identified 4 key decisions to make: interface naming, reset support, which version
+   to canonicalize, and whether to include I2C in library.
+
+  USER: 2-3, I want reset support and logic implementation. 4. this project is
+  iCEUP5K specific, so lattice-specific is fine. give me recommendations on 1 from
+  an industry perspective
+
+  CLAUDE: Recommended ready_o over busy_o. Reasoning: AXI-Stream uses TREADY/TVALID,
+   positive logic reads more naturally in code, Xilinx/Intel IP cores use ready,
+  FIFO conventions use ready/valid. Existing busy_o isn't wrong but ready_o aligns
+  better with industry standards for a canonical library.
+
+  USER: yes (to proceeding with plan)
+
+  CLAUDE: Launched a Plan agent to design the implementation. Created detailed plan
+  with file list, interface specifications, implementation steps. Wrote plan to plan
+   file and called ExitPlanMode.
+
+  USER: why are uart_rx, spi_master, debounce future modules
+
+  CLAUDE: Explained that TODO.md itself listed these as "(future)" because no
+  implementations exist yet in the codebase. uart_rx has no reusable module,
+  spi_master doesn't exist standalone, debounce is listed as "after Project B".
+  Asked if user wants to expand scope to include any of these now.
+
+  USER: I had a lot of problems with dac-adc-loopback/ getting it to work. it seemed
+   simple to me that the adc-read and dac-ramp are almost independent projects that
+  combining should be easy but it took a lot of debugging and I don't know why. take
+   a good look at all three projects and determine if using dac-adc-loopback as a
+  reference for the library is a good idea
+
+  CLAUDE: Launched thorough analysis of all three projects. Found key issues:
+  1. SPI timing mismatch - DAC captures on falling edge, ADC outputs on falling edge
+  2. The bit-shift bug - code extracts [12:1] instead of [11:0] to compensate for
+  missing first bit
+  3. Clock domain simplification - loopback removed 60MHz PLL, dropped to 6MHz SPI
+
+  Recommendation: Don't use dac-adc-loopback as library reference. The [12:1]
+  extraction is a band-aid fix. Proceed with uart_tx and i2c_master from
+  adc-read-i2c-reset-logic, leave SPI as device-specific for now.
+
+  USER: what about making part specific library, like the ads1115, the dac and the
+  adc used in the spi projects. thoughts
+
+  CLAUDE: Proposed hybrid two-tier architecture:
+  - Protocol level (universal): uart_tx, uart_rx, i2c_master, spi_master
+  - Device level (part-specific): ads1115, ad7476a, dac121s101
+
+  Benefits: Clean APIs like ads1115_read(channel), quirks hidden inside wrappers,
+  still educational since users can read device modules to learn protocols.
+
+  Asked if user wants all device modules in initial library or start smaller.
+
+  USER: what about uart-rx? why isn't this in the list?
+
+  CLAUDE: Searched codebase, found src/uart-rx/uart_rx.v exists but it's a demo
+  module with LED output, not a reusable data interface. The existing module
+  controls an LED based on '0'/'1' keypresses - received byte processing is baked
+  in. A reusable version needs data_o and valid_o ports instead of LED. Added
+  uart_rx to the library proposal with note to extract and refactor from demo.
+
+  USER: I want a spi_master.v, it just seems logical. can you fix it based on
+  comments here to be a generic functional spi_master.v
+
+  CLAUDE: Yes, explained the root cause of AD7476A bug - in CPHA=0 mode, slave
+  outputs data when CS falls BEFORE any clock edge, but existing code creates
+  falling edge first then samples, missing the first bit.
+
+  Proposed generic interface with CPOL, CPHA, WIDTH, HALF_PERIOD parameters. Device
+  modules would wrap this with correct settings - ad7476a uses CPOL=0 CPHA=0,
+  dac121s101 uses CPOL=0 CPHA=1.
+
+  USER: I want you update the /TODO.md section A.2 with all this information and
+  decisions that we made here for another agent to implement.
+
+  CLAUDE: Updated TODO.md A.2 section from ~45 lines to ~300 lines with:
+  - Two-tier architecture explanation
+  - Interface conventions table
+  - Source files reference with warnings about buggy code
+  - Complete interface specs for all 7 modules
+  - SPI mode truth table and bug explanation
+  - Implementation steps
+  - Basic verification approach
+
+  USER: commit and push
+
+  CLAUDE: Staged TODO.md specifically (not git add -A), committed with descriptive
+  message about expanding A.2 spec, pushed to main. Commit 3a1d0e0.
+
+  USER: how do we test these new library components?
+
+  CLAUDE: Presented three levels of testing:
+  1. Synthesis check - yosys, catches syntax errors only
+  2. Simulation with testbenches - iverilog, critical for proving SPI fix works
+  3. Hardware verification - lib-test project with loopback tests
+
+  Recommended starting with testbenches for protocol modules, especially
+  spi_master.v. Asked if user wants testbench specs added to TODO.md.
+
+  USER: yes add all three sections 1,2 and 3
+
+  CLAUDE: Updated TODO.md verification section with detailed specifications for all
+  three levels:
+  - Level 1: Synthesis commands for each module
+  - Level 2: Testbench specs for uart_tx_tb, uart_rx_tb, spi_master_tb (marked
+  CRITICAL), i2c_master_tb with test cases and simulated slave models
+  - Level 3: Hardware test project structure with 4 test configurations (UART
+  loopback, I2C ADS1115, SPI DAC-ADC loopback, logic analyzer verification)
+
+  USER: summarize this conversation with bullet points
+
+  CLAUDE: Provided structured summary covering design decisions, architecture, key
+  findings, source references, verification strategy, and commits.
+
+  USER: I want to replicate this conversation on youtube video. Can you write the
+  key points for me. I don't a script but something to remind me of how we got there
+
+  CLAUDE: Provided talking points organized by topic: Opening problem, 4 decisions,
+  SPI bug explanation, testing strategy, wrap-up, and memorable quotes.
+
+  USER: expand this Started with TODO.md proposal: ready_o vs existing busy_o
+
+  CLAUDE: Expanded with the setup (inverted logic explanation), the question asked,
+  industry reasoning (4 points: AXI-Stream, positive logic, FIFO conventions,
+  scalability), implementation impact (not just rename but inversion), and takeaway.
+
+  USER: append all this together, remove the colorization I want to copy and paste
+  it a text notes doc
+
+  CLAUDE: Combined all talking points into plain text format without markdown
+  formatting.
+
+  USER: can you show all the questions I asked in order and a summary of your answer
+   as a pseudo-transcript
+

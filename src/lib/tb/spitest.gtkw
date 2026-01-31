@@ -1,0 +1,29 @@
+[*]
+[*] GTKWave Analyzer v3.3.104 (w)1999-2020 BSI
+[*] Fri Jan 30 18:42:54 2026
+[*]
+[dumpfile] "/home/holla/fpga/src/lib/tb/spi_master_tb.vcd"
+[dumpfile_mtime] "Fri Jan 30 18:29:29 2026"
+[dumpfile_size] 26315
+[savefile] "/home/holla/fpga/src/lib/tb/spitest.gtkw"
+[timestart] 0
+[size] 1921 1003
+[pos] -412 -126
+*-19.906908 0 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] spi_master_tb.
+[treeopen] spi_master_tb.dut.
+[sst_width] 223
+[signals_width] 169
+[sst_expanded] 1
+[sst_vpaned_height] 281
+@29
+spi_master_tb.dut.clk_i
+@28
+spi_master_tb.dut.cs_n_o
+spi_master_tb.dut.sclk_o
+spi_master_tb.dut.mosi_o
+spi_master_tb.dut.miso_i
+@22
+spi_master_tb.dut.data_o[7:0]
+[pattern_trace] 1
+[pattern_trace] 0
