@@ -3,6 +3,10 @@
 *.json
 *.asc
 
+# Simulation artifacts
+*.vvp
+*.vcd
+
 # Editor and IDE files
 *.swp
 *.swo
