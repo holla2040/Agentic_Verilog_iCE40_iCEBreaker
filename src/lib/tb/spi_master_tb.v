@@ -188,6 +188,66 @@ module spi_master_tb;
         $display("Test 6: Walking one (0x42)");
         do_transfer(8'h24, 8'h42);
 
+        // Extended tests - walking ones pattern
+        $display("Test 7-14: Walking ones MSB to LSB");
+        do_transfer(8'h00, 8'h80);
+        do_transfer(8'h00, 8'h40);
+        do_transfer(8'h00, 8'h20);
+        do_transfer(8'h00, 8'h10);
+        do_transfer(8'h00, 8'h08);
+        do_transfer(8'h00, 8'h04);
+        do_transfer(8'h00, 8'h02);
+        do_transfer(8'h00, 8'h01);
+
+        // Walking zeros
+        $display("Test 15-22: Walking zeros MSB to LSB");
+        do_transfer(8'hFF, 8'h7F);
+        do_transfer(8'hFF, 8'hBF);
+        do_transfer(8'hFF, 8'hDF);
+        do_transfer(8'hFF, 8'hEF);
+        do_transfer(8'hFF, 8'hF7);
+        do_transfer(8'hFF, 8'hFB);
+        do_transfer(8'hFF, 8'hFD);
+        do_transfer(8'hFF, 8'hFE);
+
+        // Counter pattern
+        $display("Test 23-38: Counter 0x00 to 0x0F");
+        do_transfer(8'h00, 8'h00);
+        do_transfer(8'h00, 8'h01);
+        do_transfer(8'h00, 8'h02);
+        do_transfer(8'h00, 8'h03);
+        do_transfer(8'h00, 8'h04);
+        do_transfer(8'h00, 8'h05);
+        do_transfer(8'h00, 8'h06);
+        do_transfer(8'h00, 8'h07);
+        do_transfer(8'h00, 8'h08);
+        do_transfer(8'h00, 8'h09);
+        do_transfer(8'h00, 8'h0A);
+        do_transfer(8'h00, 8'h0B);
+        do_transfer(8'h00, 8'h0C);
+        do_transfer(8'h00, 8'h0D);
+        do_transfer(8'h00, 8'h0E);
+        do_transfer(8'h00, 8'h0F);
+
+        // More random patterns
+        $display("Test 39-54: Various patterns");
+        do_transfer(8'hA5, 8'h5A);
+        do_transfer(8'h96, 8'h69);
+        do_transfer(8'hC3, 8'h3C);
+        do_transfer(8'hE7, 8'h7E);
+        do_transfer(8'h81, 8'h18);
+        do_transfer(8'h42, 8'h24);
+        do_transfer(8'hDB, 8'hBD);
+        do_transfer(8'hF0, 8'h0F);
+        do_transfer(8'h33, 8'hCC);
+        do_transfer(8'h55, 8'hAA);
+        do_transfer(8'hAA, 8'h55);
+        do_transfer(8'h12, 8'h34);
+        do_transfer(8'h56, 8'h78);
+        do_transfer(8'h9A, 8'hBC);
+        do_transfer(8'hDE, 8'hF0);
+        do_transfer(8'h11, 8'h22);
+
         // Summary
         $display("");
         $display("===========================================");
